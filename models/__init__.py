@@ -2,6 +2,7 @@ from .user import User
 from .conversation import Conversation, Message
 from .agent import Agent, AgentConfig
 from .database import Base, engine, SessionLocal, get_db, create_tables
+from .audit_log import AuditLog
 
 # 新增模型导入
 from .course import (
@@ -31,6 +32,7 @@ __all__ = [
     "SessionLocal",
     "get_db",
     "create_tables",
+    "AuditLog",
     # 新增模型
     "Course", "CourseLesson", "CourseCategory", "CourseEnrollment",
     "LearningProgress", "CourseReview", "CourseFavorite",
@@ -41,4 +43,4 @@ __all__ = [
     "MembershipLevel", "UserMembership", "MembershipOrder",
     "MembershipBenefit", "UserBenefitUsage",
     "MembershipType", "MembershipStatus"
-] 
+]

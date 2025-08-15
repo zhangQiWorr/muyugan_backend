@@ -42,10 +42,12 @@ def create_tables():
     """
     创建所有数据库表
     """
+    # 确保所有模型都被导入
+    from . import user, conversation, agent, audit_log, course, payment, membership
     Base.metadata.create_all(bind=engine)
 
 def drop_tables():
     """
     删除所有数据库表（仅用于开发测试）
     """
-    Base.metadata.drop_all(bind=engine) 
+    Base.metadata.drop_all(bind=engine)

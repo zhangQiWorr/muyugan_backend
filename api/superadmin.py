@@ -16,18 +16,21 @@ from utils.auth_utils import get_current_user
 from permission_utils import require_permission, Permissions
 from pydantic import BaseModel
 from utils.logger import get_logger
+from auth.password_handler import PasswordHandler
 
 logger = get_logger("superadmin_api")
 router = APIRouter(prefix="/api/superadmin", tags=["超级管理员"])
+password_handler = PasswordHandler()
 
 # 数据模型
 class UserManagement(BaseModel):
-    """用户管理模型"""
+    """用户管理数据模型"""
     username: str
     email: str
     phone: Optional[str] = None
     role: str  # 'user', 'teacher', 'superadmin'
     is_active: bool = True
+    password: str  # 前端传入的密码
 
 class UserUpdate(BaseModel):
     """用户更新模型"""
@@ -95,13 +98,13 @@ async def get_all_users(
         query = db.query(User)
         
         if search:
-            query = query.filter(
-                or_(
-                    User.username.contains(search),
-                    User.email.contains(search),
-                    User.phone.contains(search) if User.phone else False
-                )
-            )
+            search_conditions = [
+                User.username.contains(search),
+                User.email.contains(search)
+            ]
+            if User.phone is not None:
+                search_conditions.append(User.phone.contains(search))
+            query = query.filter(or_(*search_conditions))
         
         if role:
             query = query.filter(User.role == role)
@@ -160,6 +163,17 @@ async def create_user(
         if existing_user:
             raise HTTPException(status_code=400, detail="用户名或邮箱已存在")
         
+        # 验证密码强度
+        password_validation = password_handler.validate_password_strength(user_data.password)
+        if not password_validation["is_valid"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"密码强度不足: {', '.join(password_validation['errors'])}"
+            )
+        
+        # 哈希密码
+        hashed_password = password_handler.hash_password(user_data.password)
+        
         # 创建新用户
         new_user = User(
             username=user_data.username,
@@ -167,7 +181,7 @@ async def create_user(
             phone=user_data.phone,
             role=user_data.role,
             is_active=user_data.is_active,
-            password_hash="temp_password_hash"  # 实际应该生成临时密码
+            hashed_password=hashed_password
         )
         
         db.add(new_user)
@@ -252,7 +266,7 @@ async def delete_user(
             raise HTTPException(status_code=400, detail="不能删除自己的账户")
         
         # 软删除：设置为非活跃状态
-        user.is_active = False
+        setattr(user, 'is_active', False)
         db.commit()
         
         logger.info(f"Superadmin {current_user.username} deleted user {user.username}")
@@ -275,7 +289,7 @@ async def get_role_permissions(
     
     超级管理员可以查看当前的角色权限配置
     """
-    from utils.permission_utils import ROLE_PERMISSIONS, get_role_description
+    from permission_utils import ROLE_PERMISSIONS, get_role_description
     
     try:
         role_configs = []
@@ -295,65 +309,69 @@ async def get_role_permissions(
         logger.error(f"Error getting role permissions: {str(e)}")
         raise HTTPException(status_code=500, detail="获取角色权限失败")
 
-@router.get("/operation-logs")
+@router.get("/audit-logs")
 @require_permission(Permissions.VIEW_SYSTEM_LOGS)
-async def get_operation_logs(
+async def get_audit_logs(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
-    user_id: Optional[int] = Query(None),
+    user_id: Optional[str] = Query(None),
+    username: Optional[str] = Query(None),
     action: Optional[str] = Query(None),
     resource_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    search: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取操作日志
+    """获取审计日志
     
-    超级管理员可以审核所有用户的操作日志
+    超级管理员可以查看所有用户的操作审计日志
     """
     try:
-        # TODO: 实现操作日志查询逻辑
-        # 这里需要有一个操作日志表来存储所有用户操作
+        from utils.audit_service import AuditService
         
-        # 模拟数据
-        mock_logs = [
-            {
-                "id": 1,
-                "user_id": 2,
-                "username": "teacher_zhang",
-                "action": "create_course",
-                "resource_type": "course",
-                "resource_id": "course_123",
-                "details": {"course_name": "幼儿数学启蒙", "price": 99.0},
-                "ip_address": "192.168.1.100",
-                "created_at": "2024-01-16T10:30:00"
-            },
-            {
-                "id": 2,
-                "user_id": 3,
-                "username": "parent_li",
-                "action": "purchase_course",
-                "resource_type": "order",
-                "resource_id": "order_456",
-                "details": {"course_name": "创意手工制作", "amount": 79.0},
-                "ip_address": "192.168.1.101",
-                "created_at": "2024-01-16T14:20:00"
-            }
-        ]
+        # 使用审计服务查询日志
+        result = AuditService.get_logs(
+            db=db,
+            page=page,
+            size=size,
+            user_id=user_id,
+            username=username,
+            action=action,
+            resource_type=resource_type,
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+            search=search
+        )
         
-        return {
-            "logs": mock_logs,
-            "pagination": {
-                "page": page,
-                "size": size,
-                "total": len(mock_logs),
-                "pages": 1
+        # 记录管理员查看日志的操作
+        from utils.audit_service import log_user_action
+        log_user_action(
+            db=db,
+            user=current_user,
+            action="view_audit_logs",
+            resource_type="audit_log",
+            details={
+                "filters": {
+                    "user_id": user_id,
+                    "username": username,
+                    "action": action,
+                    "resource_type": resource_type,
+                    "status": status,
+                    "search": search
+                },
+                "pagination": {"page": page, "size": size}
             }
-        }
+        )
+        
+        return result
+        
     except Exception as e:
-        logger.error(f"Error getting operation logs: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取操作日志失败")
+        logger.error(f"Error getting audit logs: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取审计日志失败")
 
 # ==================== 课程管理功能 ====================
 
@@ -434,9 +452,9 @@ async def update_course_status(
         if status not in valid_statuses:
             raise HTTPException(status_code=400, detail="无效的课程状态")
         
-        old_status = course.status
-        course.status = status
-        course.updated_at = datetime.utcnow()
+        old_status = getattr(course, 'status')
+        setattr(course, 'status', status)
+        setattr(course, 'updated_at', datetime.utcnow())
         
         db.commit()
         

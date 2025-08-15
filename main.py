@@ -244,6 +244,10 @@ app.add_middleware(
 app.add_middleware(APILoggingMiddleware)
 app.add_middleware(RequestContextMiddleware)
 
+# 添加审计日志中间件
+from utils.audit_middleware import AuditMiddleware
+app.add_middleware(AuditMiddleware)
+
 # 注册基础路由
 app.include_router(health_router)
 app.include_router(auth_router)
