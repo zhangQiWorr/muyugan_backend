@@ -3,7 +3,7 @@
 提供通用的认证相关函数
 """
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -14,6 +14,7 @@ from utils.logger import get_logger
 
 logger = get_logger("auth_utils")
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
 
 
 def get_auth_handler():
@@ -38,10 +39,13 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
     """获取当前认证用户（可选，用于公开接口）"""
+    if not credentials:
+        return None
+    
     try:
         token = credentials.credentials
         auth_handler = get_auth_handler()

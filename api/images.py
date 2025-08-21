@@ -70,7 +70,7 @@ def validate_image_file(file: UploadFile) -> tuple[bool, str]:
     return True, ""
 
 
-def save_image_file(file: UploadFile, filename: str) -> str:
+def save_image_file(file: UploadFile, filename: str, image_type: str) -> str:
     """
     保存图片文件
     
@@ -81,7 +81,11 @@ def save_image_file(file: UploadFile, filename: str) -> str:
     Returns:
         保存的文件路径
     """
-    filepath = os.path.join(IMAGE_DIR, filename)
+
+    from pathlib import Path
+    """确保上传目录存在"""
+    Path(os.path.join(IMAGE_DIR, image_type)).mkdir(parents=True, exist_ok=True)
+    filepath = os.path.join(IMAGE_DIR, image_type, filename)
     
     try:
         # 读取文件内容
@@ -122,6 +126,7 @@ def cleanup_uploaded_files(local_vars: dict):
 @router.post("/upload")
 async def upload_image(
     file: UploadFile = File(...),
+    image_type: str = Form(...),
     description: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -145,7 +150,7 @@ async def upload_image(
         
         # 保存文件
         try:
-            filepath = save_image_file(file, filename)
+            filepath = save_image_file(file, filename, image_type)
         except HTTPException:
             raise
         except Exception as e:
@@ -153,8 +158,8 @@ async def upload_image(
             raise HTTPException(status_code=500, detail="图片保存失败")
         
         # 构建访问URL
-        image_url = f"/static/images/{filename}"
-        
+        image_url = f"/static/images/{image_type}/{filename}"
+
         # 获取文件大小
         file_size = os.path.getsize(filepath)
         

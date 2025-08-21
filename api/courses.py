@@ -1,18 +1,23 @@
-"""
-课程管理相关API
-包含课程的CRUD操作、分类管理、课时管理等
+"""合并后的课程管理API
+包含课程的CRUD操作、分类管理、标签管理、促销管理等
+合并了course_admin.py和courses.py的功能
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, asc
-from typing import List, Optional
+from sqlalchemy import and_, or_, desc, asc, func
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime
+import os
+import re
+from datetime import datetime, timedelta
+from pydantic import BaseModel, Field
 
 from models import get_db
 from models.user import User
 from models.course import Course, CourseCategory, CourseLesson, CourseStatus, ContentType
+from models.promotion import CoursePromotion, PromotionType, PromotionStatus, CourseTag, CourseTagRelation
 from models.schemas import (
     CourseCreate, CourseUpdate, CourseResponse, CourseListResponse,
     CourseCategoryCreate, CourseCategoryUpdate, CourseCategoryResponse,
@@ -21,51 +26,163 @@ from models.schemas import (
 )
 from utils.logger import get_logger
 from utils.auth_utils import get_current_user, get_current_user_optional, check_admin_permission
+from utils.media_utils import get_media_duration, is_media_file
+from permission_utils import require_permission, Permissions
 
-logger = get_logger("courses_api")
+logger = get_logger("courses_merged_api")
 router = APIRouter(prefix="/courses", tags=["课程管理"])
 
+# ==================== 请求模型定义 ====================
 
-# 课程分类管理
-@router.post("/categories", response_model=CourseCategoryResponse)
-async def create_category(
-    category_data: CourseCategoryCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """创建课程分类（管理员）"""
-    check_admin_permission(current_user)
-    
-    # 检查分类名称是否已存在
-    existing = db.query(CourseCategory).filter(
-        CourseCategory.name == category_data.name
-    ).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="分类名称已存在"
-        )
-    
-    category = CourseCategory(**category_data.dict())
-    db.add(category)
-    db.commit()
-    db.refresh(category)
-    
-    return category
+class CoursePublishRequest(BaseModel):
+    """课程发布请求"""
+    reason: Optional[str] = None
+    scheduled_time: Optional[datetime] = None
 
+class CourseUnpublishRequest(BaseModel):
+    """课程下架请求"""
+    reason: str = Field(..., description="下架原因")
+    notify_users: bool = Field(default=True, description="是否通知用户")
+
+class PromotionCreateRequest(BaseModel):
+    """促销策略创建请求"""
+    title: str = Field(..., max_length=200)
+    description: Optional[str] = None
+    promotion_type: PromotionType
+    discount_percentage: Optional[float] = Field(None, ge=0, le=100)
+    discount_amount: Optional[float] = Field(None, ge=0)
+    min_price: float = Field(default=0.0, ge=0)
+    max_discount: Optional[float] = Field(None, ge=0)
+    start_time: datetime
+    end_time: datetime
+    usage_limit: Optional[int] = Field(None, ge=1)
+    per_user_limit: int = Field(default=1, ge=1)
+    show_countdown: bool = Field(default=True)
+    show_original_price: bool = Field(default=True)
+    promotion_badge: Optional[str] = Field(None, max_length=50)
+
+class TagCreateRequest(BaseModel):
+    """标签创建请求"""
+    name: str = Field(..., max_length=50)
+    description: Optional[str] = None
+    color: str = Field(default="#3B82F6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    icon: Optional[str] = Field(None, max_length=50)
+
+class CategoryCreateRequest(BaseModel):
+    """分类创建请求"""
+    name: str = Field(..., max_length=100)
+    description: Optional[str] = None
+    icon: Optional[str] = Field(None, max_length=100)
+    parent_id: Optional[str] = None
+    sort_order: int = Field(default=0)
+
+class CourseUpdateRequest(BaseModel):
+    """课程更新请求"""
+    title: Optional[str] = Field(None, max_length=200)
+    subtitle: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = None
+    cover_image: Optional[str] = Field(None, max_length=500)
+    category_id: Optional[str] = None
+    price: Optional[float] = Field(None, ge=0)
+    original_price: Optional[float] = Field(None, ge=0)
+    is_free: Optional[bool] = None
+    is_member_only: Optional[bool] = None
+    difficulty_level: Optional[str] = Field(None, max_length=20)
+    language: Optional[str] = Field(None, max_length=20)
+    is_featured: Optional[bool] = None
+    is_hot: Optional[bool] = None
+    tag_ids: Optional[List[str]] = None
+
+# ==================== 课程分类管理 ====================
 
 @router.get("/categories", response_model=List[CourseCategoryResponse])
 async def get_categories(
+    include_inactive: bool = Query(False, description="是否包含未激活的分类"),
+    sort_by: str = Query("sort_order", description="排序字段: sort_order, name, created_at, course_count"),
+    sort_order: str = Query("asc", description="排序方向: asc, desc"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    """获取课程分类列表"""
-    categories = db.query(CourseCategory).filter(
-        CourseCategory.is_active == True
-    ).order_by(CourseCategory.sort_order, CourseCategory.name).all()
-    
-    return categories
-
+    """获取课程分类列表（兼容两种权限模式）"""
+    try:
+        query = db.query(CourseCategory)
+        
+        # 如果用户未登录或非管理员，只显示激活的分类
+        if not current_user or current_user.role not in ['admin', 'superadmin']:
+            query = query.filter(CourseCategory.is_active == True)
+        elif not include_inactive:
+            query = query.filter(CourseCategory.is_active == True)
+        
+        # 根据排序参数进行排序
+        valid_sort_fields = {
+            "sort_order": CourseCategory.sort_order,
+            "name": CourseCategory.name,
+            "created_at": CourseCategory.created_at
+        }
+        
+        sort_field = valid_sort_fields.get(sort_by, CourseCategory.sort_order)
+        if sort_order.lower() == "desc":
+            query = query.order_by(desc(sort_field))
+        else:
+            query = query.order_by(asc(sort_field))
+        
+        # 如果按sort_order排序，添加name作为次要排序
+        if sort_by == "sort_order":
+            query = query.order_by(sort_field, CourseCategory.name)
+        
+        categories = query.all()
+        
+        # 统计每个分类下的课程数量
+        category_results = []
+        for cat in categories:
+            # 根据用户权限统计课程数量
+            course_query = db.query(Course).filter(Course.category_id == cat.id)
+            
+            # 非管理员只统计已发布的课程
+            if not current_user or current_user.role not in ['admin', 'superadmin']:
+                course_query = course_query.filter(Course.status == CourseStatus.PUBLISHED)
+            
+            course_count = course_query.count()
+            
+            # 如果是管理员请求，返回详细信息
+            if current_user and current_user.role in ['admin', 'superadmin']:
+                category_results.append({
+                    "id": cat.id,
+                    "name": cat.name,
+                    "description": cat.description,
+                    "icon": cat.icon,
+                    "sort_order": cat.sort_order,
+                    "is_active": cat.is_active,
+                    "parent_id": cat.parent_id,
+                    "course_count": course_count,
+                    "created_at": cat.created_at,
+                    "updated_at": cat.updated_at
+                })
+            else:
+                # 普通用户返回基本信息和课程数量
+                category_results.append({
+                    "id": cat.id,
+                    "name": cat.name,
+                    "description": cat.description,
+                    "icon": cat.icon,
+                    "sort_order": cat.sort_order,
+                    "is_active": cat.is_active,
+                    "parent_id": cat.parent_id,
+                    "course_count": course_count,
+                    "created_at": cat.created_at,
+                    "updated_at": cat.updated_at
+                })
+        
+        # 如果按course_count排序，需要重新排序结果
+        if sort_by == "course_count":
+            reverse_order = sort_order.lower() == "desc"
+            category_results.sort(key=lambda x: x["course_count"], reverse=reverse_order)
+        
+        return category_results
+        
+    except Exception as e:
+        logger.error(f"Error getting categories: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取分类列表失败")
 
 @router.get("/categories/{category_id}", response_model=CourseCategoryResponse)
 async def get_category(category_id: str, db: Session = Depends(get_db)):
@@ -75,6 +192,51 @@ async def get_category(category_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="分类不存在")
     return category
 
+@router.post("/categories", response_model=CourseCategoryResponse)
+async def create_category(
+    category_data: CourseCategoryCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建课程分类（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        # 检查分类名称是否已存在
+        existing = db.query(CourseCategory).filter(
+            CourseCategory.name == category_data.name
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="分类名称已存在"
+            )
+        
+        # 检查父分类是否存在
+        if hasattr(category_data, 'parent_id') and category_data.parent_id:
+            parent = db.query(CourseCategory).filter(
+                CourseCategory.id == category_data.parent_id
+            ).first()
+            if not parent:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="父分类不存在"
+                )
+        
+        category = CourseCategory(**category_data.dict())
+        db.add(category)
+        db.commit()
+        db.refresh(category)
+        
+        logger.info(f"Category {category.id} created by admin {current_user.username}")
+        return category
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating category: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建分类失败")
 
 @router.put("/categories/{category_id}", response_model=CourseCategoryResponse)
 async def update_category(
@@ -104,7 +266,6 @@ async def update_category(
     db.refresh(category)
     
     return category
-
 
 @router.delete("/categories/{category_id}", response_model=SuccessResponse)
 async def delete_category(
@@ -149,9 +310,190 @@ async def delete_category(
     
     return SuccessResponse(message="分类删除成功")
 
+# ==================== 课程标签管理 ====================
 
-# 课程管理
-@router.post("/", response_model=CourseResponse)
+@router.get("/tags")
+async def get_tags(
+    include_inactive: bool = Query(False, description="是否包含未激活的标签"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """获取课程标签列表"""
+    try:
+        query = db.query(CourseTag)
+        
+        if not include_inactive:
+            query = query.filter(CourseTag.is_active == True)
+        
+        tags = query.order_by(desc(CourseTag.usage_count), CourseTag.name).all()
+        
+        return {
+            "tags": [
+                {
+                    "id": tag.id,
+                    "name": tag.name,
+                    "description": tag.description,
+                    "color": tag.color,
+                    "icon": tag.icon,
+                    "usage_count": tag.usage_count,
+                    "is_active": tag.is_active,
+                    "sort_order": getattr(tag, 'sort_order', 0),
+                    "created_at": tag.created_at
+                } for tag in tags
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting tags: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取标签列表失败")
+
+@router.post("/tags")
+async def create_tag(
+    request: TagCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建课程标签（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        # 检查标签名称是否已存在
+        existing = db.query(CourseTag).filter(CourseTag.name == request.name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="标签名称已存在")
+        
+        tag = CourseTag(
+            name=request.name,
+            description=request.description,
+            color=request.color,
+            icon=request.icon,
+            created_by=current_user.id
+        )
+        
+        db.add(tag)
+        db.commit()
+        db.refresh(tag)
+        
+        logger.info(f"Tag {tag.id} created by admin {current_user.username}")
+        
+        return {
+            "message": "标签创建成功",
+            "tag": {
+                "id": tag.id,
+                "name": tag.name,
+                "description": tag.description,
+                "color": tag.color,
+                "icon": tag.icon,
+                "usage_count": tag.usage_count,
+                "is_active": tag.is_active,
+                "created_at": tag.created_at
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating tag: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建标签失败")
+
+@router.put("/tags/{tag_id}")
+async def update_tag(
+    tag_id: str,
+    request: TagCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新课程标签（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        tag = db.query(CourseTag).filter(CourseTag.id == tag_id).first()
+        if not tag:
+            raise HTTPException(status_code=404, detail="标签不存在")
+        
+        # 检查标签名称是否已存在（排除当前标签）
+        existing = db.query(CourseTag).filter(
+            and_(CourseTag.name == request.name, CourseTag.id != tag_id)
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="标签名称已存在")
+        
+        # 更新标签信息
+        tag.name = request.name
+        tag.description = request.description
+        tag.color = request.color
+        tag.icon = request.icon
+        tag.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(tag)
+        
+        logger.info(f"Tag {tag.id} updated by admin {current_user.username}")
+        
+        return {
+            "message": "标签更新成功",
+            "tag": {
+                "id": tag.id,
+                "name": tag.name,
+                "description": tag.description,
+                "color": tag.color,
+                "icon": tag.icon,
+                "usage_count": tag.usage_count,
+                "is_active": tag.is_active,
+                "created_at": tag.created_at
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating tag {tag_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新标签失败")
+
+@router.delete("/tags/{tag_id}")
+async def delete_tag(
+    tag_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除课程标签（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        tag = db.query(CourseTag).filter(CourseTag.id == tag_id).first()
+        if not tag:
+            raise HTTPException(status_code=404, detail="标签不存在")
+        
+        # 检查是否有课程正在使用该标签
+        courses_using_tag = db.query(CourseTagRelation).filter(
+            CourseTagRelation.tag_id == tag_id
+        ).count()
+        
+        if courses_using_tag > 0:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"无法删除标签，还有 {courses_using_tag} 个课程正在使用该标签"
+            )
+        
+        db.delete(tag)
+        db.commit()
+        
+        logger.info(f"Tag {tag_id} deleted by admin {current_user.username}")
+        
+        return SuccessResponse(message="标签删除成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting tag {tag_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="删除标签失败")
+
+# ==================== 课程管理 ====================
+
+@router.post("/", response_model=SuccessResponse)
 async def create_course(
     course_data: CourseCreate,
     current_user: User = Depends(get_current_user),
@@ -160,28 +502,48 @@ async def create_course(
     """创建课程（管理员）"""
     check_admin_permission(current_user)
     
-    # 检查分类是否存在
-    if course_data.category_id:
-        category = db.query(CourseCategory).filter(
-            CourseCategory.id == course_data.category_id
-        ).first()
-        if not category:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="分类不存在"
-            )
-    
-    course = Course(
-        **course_data.dict(),
-        creator_id=current_user.id,
-        status=CourseStatus.DRAFT
-    )
-    db.add(course)
-    db.commit()
-    db.refresh(course)
-    
-    return course
-
+    try:
+        # 检查分类是否存在
+        if course_data.category_id:
+            category = db.query(CourseCategory).filter(
+                CourseCategory.id == course_data.category_id
+            ).first()
+            if not category:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="分类不存在"
+                )
+        
+        course = Course(
+            **course_data.dict(),
+            creator_id=current_user.id,
+            status=CourseStatus.DRAFT
+        )
+        db.add(course)
+        db.commit()
+        db.refresh(course)
+        
+        logger.info(f"Course created successfully: {course.id} by user {current_user.username}")
+        
+        return SuccessResponse(
+            message="课程创建成功",
+            data={
+                "id": course.id,
+                "title": course.title,
+                "status": course.status,
+                "created_at": datetime.utcnow().isoformat()
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating course: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="创建课程失败"
+        )
 
 @router.get("/", response_model=CourseListResponse)
 async def get_courses(
@@ -190,6 +552,8 @@ async def get_courses(
     search: Optional[str] = Query(None),
     category_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    sort_by: str = Query("created_at", description="排序字段: created_at, updated_at, title, price, view_count, is_featured, is_hot"),
+    sort_order: str = Query("desc", description="排序方向: asc, desc"),
     current_user: Optional[User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db)
 ):
@@ -218,6 +582,23 @@ async def get_courses(
     if status:
         query = query.filter(Course.status == status)
     
+    # 排序逻辑
+    valid_sort_fields = {
+        "created_at": Course.created_at,
+        "updated_at": Course.updated_at,
+        "title": Course.title,
+        "price": Course.price,
+        "view_count": Course.view_count,
+        "is_featured": Course.is_featured,
+        "is_hot": Course.is_hot
+    }
+    
+    sort_field = valid_sort_fields.get(sort_by, Course.created_at)
+    if sort_order.lower() == "desc":
+        query = query.order_by(desc(sort_field))
+    else:
+        query = query.order_by(asc(sort_field))
+    
     # 计算总数
     total = query.count()
     
@@ -226,18 +607,17 @@ async def get_courses(
     
     # 加载关联数据
     for course in courses:
-        if course.category_id:
+        if getattr(course, 'category_id', None):
             course.category = db.query(CourseCategory).filter(
                 CourseCategory.id == course.category_id
             ).first()
     
     return CourseListResponse(
-        courses=courses,
+        courses=[CourseResponse.from_orm(course) for course in courses],
         total=total,
         page=page,
         size=size
     )
-
 
 @router.get("/{course_id}", response_model=CourseResponse)
 async def get_course(
@@ -255,14 +635,14 @@ async def get_course(
     
     # 权限检查：普通用户只能查看已发布的课程
     if not current_user or current_user.role not in ['admin', 'superadmin']:
-        if course.status != CourseStatus.PUBLISHED:
+        if getattr(course, 'status', None) != CourseStatus.PUBLISHED:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="课程不存在"
             )
     
     # 加载关联数据
-    if course.category_id:
+    if getattr(course, 'category_id', None):
         course.category = db.query(CourseCategory).filter(
             CourseCategory.id == course.category_id
         ).first()
@@ -276,7 +656,7 @@ async def get_course(
     return course
 
 
-@router.put("/{course_id}", response_model=CourseResponse)
+@router.put("/{course_id}",  response_model=CourseResponse)
 async def update_course(
     course_id: str,
     course_data: CourseUpdate,
@@ -298,11 +678,11 @@ async def update_course(
     for field, value in update_data.items():
         setattr(course, field, value)
     
+    setattr(course, 'updated_at', datetime.utcnow())
     db.commit()
     db.refresh(course)
     
     return course
-
 
 @router.delete("/{course_id}", response_model=SuccessResponse)
 async def delete_course(
@@ -313,20 +693,127 @@ async def delete_course(
     """删除课程（管理员）"""
     check_admin_permission(current_user)
     
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
-        )
-    
-    db.delete(course)
-    db.commit()
-    
-    return SuccessResponse(message="课程删除成功")
+    try:
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课程不存在"
+            )
+        
+        # 检查课程是否有关联的课时
+        lesson_count = db.query(CourseLesson).filter(
+            CourseLesson.course_id == course_id,
+            CourseLesson.is_active == True
+        ).count()
+        
+        if lesson_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"课程下还有 {lesson_count} 个课时，请先删除所有课时后再删除课程"
+            )
+        
+        # 删除课程标签关联
+        db.query(CourseTagRelation).filter(
+            CourseTagRelation.course_id == course_id
+        ).delete()
+        
+        # 删除课程促销策略
+        db.query(CoursePromotion).filter(
+            CoursePromotion.course_id == course_id
+        ).delete()
+        
+        # 删除课程
+        db.delete(course)
+        db.commit()
+        
+        logger.info(f"Course {course_id} deleted by admin {current_user.username}")
+        
+        return SuccessResponse(message="课程删除成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting course {course_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="删除课程失败")
 
+# ==================== 课程状态管理 ====================
 
-# 课时管理
+@router.post("/{course_id}/publish", response_model=SuccessResponse)
+async def publish_course(
+    course_id: str,
+    request: Optional[CoursePublishRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """发布课程（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课程不存在"
+            )
+        
+        # 验证课程是否可以发布
+        if getattr(course, 'status', None) == CourseStatus.PUBLISHED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="课程已经发布"
+            )
+        
+        setattr(course, 'status', CourseStatus.PUBLISHED)
+        setattr(course, 'published_at', datetime.utcnow())
+        db.commit()
+        
+        logger.info(f"Course {course_id} published by admin {current_user.username}")
+        
+        return SuccessResponse(message="课程发布成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error publishing course {course_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="发布课程失败")
+
+@router.post("/{course_id}/unpublish", response_model=SuccessResponse)
+async def unpublish_course(
+    course_id: str,
+    request: Optional[CourseUnpublishRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """下架课程（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课程不存在"
+            )
+        
+        setattr(course, 'status', CourseStatus.OFFLINE)
+        db.commit()
+        
+        logger.info(f"Course {course_id} unpublished by admin {current_user.username}")
+        
+        return SuccessResponse(message="课程下架成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error unpublishing course {course_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="下架课程失败")
+
+# ==================== 课时管理 ====================
+
 @router.post("/{course_id}/lessons", response_model=CourseLessonResponse, status_code=status.HTTP_201_CREATED)
 async def create_lesson(
     course_id: str,
@@ -344,21 +831,22 @@ async def create_lesson(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="课程不存在"
         )
-    
+
+    lesson_data.duration = lesson_data.duration * 60
     lesson = CourseLesson(**lesson_data.dict(), course_id=course_id)
     db.add(lesson)
     db.commit()
     db.refresh(lesson)
     
     # 更新课程课时数量
-    course.lesson_count = db.query(CourseLesson).filter(
+    lesson_count = db.query(CourseLesson).filter(
         CourseLesson.course_id == course_id,
         CourseLesson.is_active == True
     ).count()
+    setattr(course, 'lesson_count', lesson_count)
     db.commit()
     
     return lesson
-
 
 @router.get("/{course_id}/lessons", response_model=List[CourseLessonResponse])
 async def get_lessons(
@@ -374,7 +862,7 @@ async def get_lessons(
     
     # 权限检查：普通用户只能查看已发布课程的课时
     if not current_user or current_user.role not in ['admin', 'superadmin']:
-        if course.status != CourseStatus.PUBLISHED:
+        if getattr(course, 'status', None) != CourseStatus.PUBLISHED:
             raise HTTPException(status_code=404, detail="课程不存在")
     
     lessons = db.query(CourseLesson).filter(
@@ -383,7 +871,6 @@ async def get_lessons(
     ).order_by(CourseLesson.sort_order).all()
     
     return lessons
-
 
 @router.put("/lessons/{lesson_id}", response_model=CourseLessonResponse)
 async def update_lesson(
@@ -401,7 +888,10 @@ async def update_lesson(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="课时不存在"
         )
-    
+
+    if lesson_data.duration:
+        lesson_data.duration = lesson_data.duration * 60
+
     # 更新课时信息
     update_data = lesson_data.dict(exclude_unset=True)
     for field, value in update_data.items():
@@ -411,7 +901,6 @@ async def update_lesson(
     db.refresh(lesson)
     
     return lesson
-
 
 @router.delete("/lessons/{lesson_id}", response_model=SuccessResponse)
 async def delete_lesson(
@@ -436,56 +925,518 @@ async def delete_lesson(
     # 更新课程课时数量
     course = db.query(Course).filter(Course.id == course_id).first()
     if course:
-        course.lesson_count = db.query(CourseLesson).filter(
+        lesson_count = db.query(CourseLesson).filter(
             CourseLesson.course_id == course_id,
             CourseLesson.is_active == True
         ).count()
+        setattr(course, 'lesson_count', lesson_count)
         db.commit()
     
     return SuccessResponse(message="课时删除成功")
 
+# 课时媒体播放相关函数
+def handle_lesson_media_range_request(request: Request, file_path: str, file_size: int, content_type: str):
+    """处理课时媒体文件的Range请求（支持视频和音频）"""
+    range_header = request.headers.get('range')
+    if not range_header:
+        return None
+    
+    # 解析Range头
+    range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    if not range_match:
+        return None
+    
+    start = int(range_match.group(1))
+    end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+    
+    # 确保范围有效
+    start = max(0, min(start, file_size - 1))
+    end = max(start, min(end, file_size - 1))
+    
+    chunk_size = end - start + 1
+    
+    def generate():
+        with open(file_path, 'rb') as f:
+            f.seek(start)
+            remaining = chunk_size
+            while remaining > 0:
+                read_size = min(8192, remaining)
+                data = f.read(read_size)
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+    
+    headers = {
+        'Content-Range': f'bytes {start}-{end}/{file_size}',
+        'Accept-Ranges': 'bytes',
+        'Content-Length': str(chunk_size),
+        'Content-Type': content_type
+    }
+    
+    return StreamingResponse(
+        generate(),
+        status_code=206,
+        headers=headers
+    )
 
-# 课程状态管理
-@router.post("/{course_id}/publish", response_model=SuccessResponse)
-async def publish_course(
-    course_id: str,
+@router.get("/lessons/{lesson_id}/play")
+async def play_lesson_media(
+    lesson_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """发布课程（管理员）"""
-    check_admin_permission(current_user)
-    
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
+    """播放课时媒体文件（支持视频和音频流式播放）"""
+    try:
+        # 查找课时
+        lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
+        if not lesson:
+            raise HTTPException(status_code=404, detail="课时不存在")
+        
+        # 查找课程
+        course = db.query(Course).filter(Course.id == lesson.course_id).first()
+        if not course:
+            raise HTTPException(status_code=404, detail="课程不存在")
+        
+        # 权限检查
+        is_admin = current_user.role in ['admin', 'superadmin']
+        
+        # 管理员可以访问所有内容
+        if not is_admin:
+            # 检查课程是否已发布
+            if course.status != CourseStatus.PUBLISHED:
+                raise HTTPException(status_code=403, detail="课程未发布")
+            
+            # 检查是否为付费课程且用户是否已购买
+            if course.price > 0 and not lesson.is_free:
+                # 这里需要检查用户是否已购买课程
+                # 可以根据实际的购买记录表来实现
+                # enrollment = db.query(CourseEnrollment).filter(
+                #     CourseEnrollment.user_id == current_user.id,
+                #     CourseEnrollment.course_id == course.id
+                # ).first()
+                # if not enrollment:
+                #     raise HTTPException(status_code=403, detail="请先购买课程")
+                pass
+        
+        # 检查内容类型是否为视频或音频
+        if lesson.content_type not in [ContentType.VIDEO, ContentType.AUDIO]:
+            raise HTTPException(status_code=400, detail="该课时不是视频或音频内容")
+        
+        # 获取媒体文件路径
+        if not lesson.content_url:
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
+        
+        # 将相对路径转换为绝对路径
+        if lesson.content_url.startswith('/static/'):
+            file_path = lesson.content_url[1:]  # 去掉开头的 '/'
+        else:
+            file_path = lesson.content_url
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            logger.error(f"媒体文件不存在: {file_path}")
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
+        
+        # 获取文件大小
+        file_size = os.path.getsize(file_path)
+        
+        # 根据文件扩展名确定MIME类型
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        # 视频MIME类型
+        video_mime_types = {
+            '.mp4': 'video/mp4',
+            '.mov': 'video/quicktime',
+            '.avi': 'video/x-msvideo',
+            '.mkv': 'video/x-matroska',
+            '.webm': 'video/webm',
+            '.flv': 'video/x-flv',
+            '.wmv': 'video/x-ms-wmv'
+        }
+        
+        # 音频MIME类型
+        audio_mime_types = {
+            '.mp3': 'audio/mpeg',
+            '.wav': 'audio/wav',
+            '.flac': 'audio/flac',
+            '.aac': 'audio/aac',
+            '.ogg': 'audio/ogg',
+            '.m4a': 'audio/mp4',
+            '.wma': 'audio/x-ms-wma'
+        }
+        
+        # 确定内容类型
+        if lesson.content_type == ContentType.VIDEO:
+            content_type = video_mime_types.get(file_ext, 'video/mp4')
+            media_type = "视频"
+        elif lesson.content_type == ContentType.AUDIO:
+            content_type = audio_mime_types.get(file_ext, 'audio/mpeg')
+            media_type = "音频"
+        else:
+            content_type = 'application/octet-stream'
+            media_type = "媒体"
+        
+        # 记录播放日志
+        logger.info(f"用户 {current_user.username} 播放课时{media_type}: {lesson.title} (ID: {lesson_id})")
+        
+        # 处理Range请求（支持音视频拖拽和流式播放）
+        range_response = handle_lesson_media_range_request(request, file_path, file_size, content_type)
+        if range_response:
+            return range_response
+        
+        # 返回完整文件
+        headers = {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': str(file_size),
+            'Cache-Control': 'public, max-age=3600',
+            'Content-Type': content_type
+        }
+        
+        return FileResponse(
+            path=file_path,
+            media_type=content_type,
+            headers=headers
         )
-    
-    course.status = CourseStatus.PUBLISHED
-    course.published_at = datetime.utcnow()
-    db.commit()
-    
-    return SuccessResponse(message="课程发布成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"播放课时媒体文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="播放媒体文件失败")
 
-
-@router.post("/{course_id}/unpublish", response_model=SuccessResponse)
-async def unpublish_course(
-    course_id: str,
+@router.put("/lessons/reorder", response_model=SuccessResponse)
+async def reorder_lessons(
+    lesson_orders: List[Dict[str, Any]] = Body(..., description="课时排序列表，格式: [{\"id\": \"lesson_id\", \"sort_order\": 1}]"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """下架课程（管理员）"""
+    """批量更新课时排序（管理员）"""
     check_admin_permission(current_user)
     
-    course = db.query(Course).filter(Course.id == course_id).first()
+    try:
+        # 验证输入数据
+        if not lesson_orders:
+            raise HTTPException(status_code=400, detail="排序数据不能为空")
+        
+        # 批量更新课时排序
+        for order_data in lesson_orders:
+            lesson_id = order_data.get('id')
+            sort_order = order_data.get('sort_order')
+            
+            if not lesson_id or sort_order is None:
+                raise HTTPException(status_code=400, detail="课时ID和排序值不能为空")
+            
+            lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
+            if lesson:
+                setattr(lesson, 'sort_order', sort_order)
+        
+        db.commit()
+        logger.info(f"✅ 批量更新课时排序成功，共更新 {len(lesson_orders)} 个课时")
+        
+        return SuccessResponse(message="课时排序更新成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"批量更新课时排序失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新课时排序失败")
+
+# ==================== 促销策略管理 ====================
+
+@router.get("/{course_id}/promotions")
+async def get_course_promotions(
+    course_id: str,
+    status: Optional[PromotionStatus] = Query(None, description="促销状态筛选"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取课程促销策略列表（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        # 检查课程是否存在
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(status_code=404, detail="课程不存在")
+        
+        query = db.query(CoursePromotion).filter(CoursePromotion.course_id == course_id)
+        
+        if status:
+            query = query.filter(CoursePromotion.status == status)
+        
+        promotions = query.order_by(desc(CoursePromotion.created_at)).all()
+        
+        return {
+            "promotions": [
+                {
+                    "id": promo.id,
+                    "title": promo.title,
+                    "description": promo.description,
+                    "promotion_type": promo.promotion_type,
+                    "status": promo.status,
+                    "discount_percentage": promo.discount_percentage,
+                    "discount_amount": promo.discount_amount,
+                    "min_price": promo.min_price,
+                    "max_discount": promo.max_discount,
+                    "start_time": promo.start_time,
+                    "end_time": promo.end_time,
+                    "usage_limit": promo.usage_limit,
+                    "used_count": promo.used_count,
+                    "per_user_limit": promo.per_user_limit,
+                    "show_countdown": promo.show_countdown,
+                    "show_original_price": promo.show_original_price,
+                    "promotion_badge": promo.promotion_badge,
+                    "is_active": promo.is_active(),
+                    "discounted_price": promo.calculate_discounted_price(getattr(course, 'price', 0)),
+                    "created_at": promo.created_at,
+                    "updated_at": promo.updated_at
+                } for promo in promotions
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting promotions for course {course_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取促销策略失败")
+
+@router.post("/{course_id}/promotions")
+async def create_promotion(
+    course_id: str,
+    request: PromotionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建课程促销策略（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        # 检查课程是否存在
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(status_code=404, detail="课程不存在")
+        
+        # 验证促销参数
+        if request.promotion_type == PromotionType.PERCENTAGE:
+            if not request.discount_percentage or request.discount_percentage <= 0:
+                raise HTTPException(status_code=400, detail="百分比折扣必须大于0")
+        elif request.promotion_type == PromotionType.FIXED_AMOUNT:
+            if not request.discount_amount or request.discount_amount <= 0:
+                raise HTTPException(status_code=400, detail="固定金额折扣必须大于0")
+        
+        if request.start_time >= request.end_time:
+            raise HTTPException(status_code=400, detail="开始时间必须早于结束时间")
+        
+        # 检查是否有重叠的激活促销
+        overlapping = db.query(CoursePromotion).filter(
+            and_(
+                CoursePromotion.course_id == course_id,
+                CoursePromotion.status == PromotionStatus.ACTIVE,
+                or_(
+                    and_(CoursePromotion.start_time <= request.start_time, CoursePromotion.end_time >= request.start_time),
+                    and_(CoursePromotion.start_time <= request.end_time, CoursePromotion.end_time >= request.end_time),
+                    and_(CoursePromotion.start_time >= request.start_time, CoursePromotion.end_time <= request.end_time)
+                )
+            )
+        ).first()
+        
+        if overlapping:
+            raise HTTPException(status_code=400, detail="该时间段已有激活的促销策略")
+        
+        promotion = CoursePromotion(
+            course_id=course_id,
+            title=request.title,
+            description=request.description,
+            promotion_type=request.promotion_type,
+            discount_percentage=request.discount_percentage,
+            discount_amount=request.discount_amount,
+            min_price=request.min_price,
+            max_discount=request.max_discount,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            usage_limit=request.usage_limit,
+            per_user_limit=request.per_user_limit,
+            show_countdown=request.show_countdown,
+            show_original_price=request.show_original_price,
+            promotion_badge=request.promotion_badge,
+            created_by=current_user.id
+        )
+        
+        db.add(promotion)
+        db.commit()
+        db.refresh(promotion)
+        
+        logger.info(f"Promotion {promotion.id} created for course {course_id} by admin {current_user.username}")
+        
+        return {
+            "message": "促销策略创建成功",
+            "promotion": {
+                "id": promotion.id,
+                "title": promotion.title,
+                "promotion_type": promotion.promotion_type,
+                "status": promotion.status,
+                "start_time": promotion.start_time,
+                "end_time": promotion.end_time,
+                "discounted_price": promotion.calculate_discounted_price(getattr(course, 'price', 0)),
+                "created_at": promotion.created_at
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating promotion for course {course_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建促销策略失败")
+
+@router.put("/promotions/{promotion_id}/status")
+async def update_promotion_status(
+    promotion_id: str,
+    status: PromotionStatus = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新促销策略状态（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        promotion = db.query(CoursePromotion).filter(CoursePromotion.id == promotion_id).first()
+        if not promotion:
+            raise HTTPException(status_code=404, detail="促销策略不存在")
+        
+        old_status = getattr(promotion, 'status', None)
+        setattr(promotion, 'status', status)
+        setattr(promotion, 'updated_at', datetime.utcnow())
+        
+        db.commit()
+        
+        logger.info(f"Promotion {promotion_id} status changed from {old_status} to {status} by admin {current_user.username}")
+        
+        return {
+            "message": "促销策略状态更新成功",
+            "promotion_id": promotion_id,
+            "old_status": old_status,
+            "new_status": status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating promotion status {promotion_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新促销策略状态失败")
+
+# ==================== 统计信息 ====================
+
+@router.get("/statistics")
+async def get_course_statistics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取课程统计信息（管理员）"""
+    check_admin_permission(current_user)
+    
+    try:
+        # 课程状态统计
+        status_stats = db.query(
+            Course.status,
+            func.count(Course.id).label('count')
+        ).group_by(Course.status).all()
+        
+        # 分类统计
+        category_stats = db.query(
+            CourseCategory.name,
+            func.count(Course.id).label('count')
+        ).join(Course, CourseCategory.id == Course.category_id, isouter=True).group_by(CourseCategory.id, CourseCategory.name).all()
+        
+        # 促销统计
+        promotion_stats = db.query(
+            CoursePromotion.status,
+            func.count(CoursePromotion.id).label('count')
+        ).group_by(CoursePromotion.status).all()
+        
+        # 总体统计
+        total_courses = db.query(Course).count()
+        total_categories = db.query(CourseCategory).count()
+        total_tags = db.query(CourseTag).count()
+        active_promotions = db.query(CoursePromotion).filter(CoursePromotion.status == PromotionStatus.ACTIVE).count()
+        
+        return {
+            "total_statistics": {
+                "total_courses": total_courses,
+                "total_categories": total_categories,
+                "total_tags": total_tags,
+                "active_promotions": active_promotions
+            },
+            "status_statistics": [
+                {"status": stat.status, "count": stat.count}
+                for stat in status_stats
+            ],
+            "category_statistics": [
+                {"category": stat.name or "未分类", "count": stat.count}
+                for stat in category_stats
+            ],
+            "promotion_statistics": [
+                {"status": stat.status, "count": stat.count}
+                for stat in promotion_stats
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting course statistics: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取统计信息失败")# 在第870行左右，get_lessons函数之后添加新的接口
+
+@router.get("/lessons/{lesson_id}", response_model=CourseLessonResponse)
+async def get_lesson_detail(
+    lesson_id: str,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """获取课时详情"""
+    # 查找课时
+    lesson = db.query(CourseLesson).filter(
+        CourseLesson.id == lesson_id,
+        CourseLesson.is_active == True
+    ).first()
+    
+    if not lesson:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="课时不存在"
+        )
+    
+    # 检查课程是否存在
+    course = db.query(Course).filter(Course.id == lesson.course_id).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
+            detail="关联课程不存在"
         )
     
-    course.status = CourseStatus.OFFLINE
-    db.commit()
+    # 权限检查：普通用户只能查看已发布课程的课时
+    if not current_user or current_user.role not in ['admin', 'superadmin']:
+        if getattr(course, 'status', None) != CourseStatus.PUBLISHED:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
+        
+        # 如果课时不是免费的，需要检查用户是否已报名课程
+        if not lesson.is_free:
+            from models.course import CourseEnrollment
+            enrollment = db.query(CourseEnrollment).filter(
+                CourseEnrollment.user_id == current_user.id,
+                CourseEnrollment.course_id == lesson.course_id,
+                CourseEnrollment.is_active == True
+            ).first()
+            
+            if not enrollment:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="需要报名课程才能查看此课时"
+                )
     
-    return SuccessResponse(message="课程下架成功")
+    return lesson

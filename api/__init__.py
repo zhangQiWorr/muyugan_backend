@@ -13,6 +13,7 @@ from .courses import router as courses_router
 from .orders import router as orders_router
 from .learning import router as learning_router
 from .membership import router as membership_router
+from .lesson_materials import router as lesson_router
 
 # 基础路由列表
 base_routers = [
@@ -24,6 +25,7 @@ base_routers = [
     "orders_router",
     "learning_router",
     "membership_router",
+    "lesson_router"
 ]
 
 # AI相关路由（可选，根据依赖可用性动态导入）
@@ -46,4 +48,4 @@ except ImportError as e:
     # 如果AI相关模块不可用，只导出基础功能
     print(f"⚠️ AI相关模块导入失败: {e}")
     print("系统将以简化模式运行，仅支持知识付费功能")
-    __all__ = base_routers 
+    __all__ = base_routers

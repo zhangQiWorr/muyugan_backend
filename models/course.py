@@ -23,6 +23,7 @@ class ContentType(str, enum.Enum):
     AUDIO = "audio"           # 音频
     TEXT = "text"             # 图文
     PDF = "pdf"               # PDF文档
+    DOCUMENT = "document"     # 文档
     QUIZ = "quiz"             # 测验
 
 

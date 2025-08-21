@@ -29,6 +29,7 @@ class Permissions(Enum):
     UPDATE_COURSE = "update_course"
     DELETE_COURSE = "delete_course"
     PUBLISH_COURSE = "publish_course"
+    MANAGE_COURSES = "manage_courses"
     MANAGE_COURSE_CATEGORIES = "manage_course_categories"
     
     # 订单管理权限

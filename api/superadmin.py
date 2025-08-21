@@ -262,7 +262,7 @@ async def delete_user(
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在")
         
-        if user.id == current_user.id:
+        if str(user.id) == str(current_user.id):
             raise HTTPException(status_code=400, detail="不能删除自己的账户")
         
         # 软删除：设置为非活跃状态
@@ -347,25 +347,8 @@ async def get_audit_logs(
             search=search
         )
         
-        # 记录管理员查看日志的操作
-        from utils.audit_service import log_user_action
-        log_user_action(
-            db=db,
-            user=current_user,
-            action="view_audit_logs",
-            resource_type="audit_log",
-            details={
-                "filters": {
-                    "user_id": user_id,
-                    "username": username,
-                    "action": action,
-                    "resource_type": resource_type,
-                    "status": status,
-                    "search": search
-                },
-                "pagination": {"page": page, "size": size}
-            }
-        )
+        # 不再记录查看审计日志的操作，避免产生过多审计记录
+        # 审计接口的访问已通过中间件排除
         
         return result
         
@@ -375,104 +358,7 @@ async def get_audit_logs(
 
 # ==================== 课程管理功能 ====================
 
-@router.get("/courses/management")
-@require_permission(Permissions.VIEW_COURSES)
-async def get_courses_for_management(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    status: Optional[str] = Query(None),
-    category_id: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """获取课程管理列表
-    
-    超级管理员可以查看和管理所有课程
-    """
-    try:
-        query = db.query(Course)
-        
-        if status:
-            query = query.filter(Course.status == status)
-        if category_id:
-            query = query.filter(Course.category_id == category_id)
-        if search:
-            query = query.filter(Course.title.contains(search))
-        
-        total = query.count()
-        courses = query.offset((page - 1) * size).limit(size).all()
-        
-        return {
-            "courses": [
-                {
-                    "id": course.id,
-                    "title": course.title,
-                    "description": course.description,
-                    "price": course.price,
-                    "discount_price": getattr(course, 'discount_price', None),
-                    "status": course.status,
-                    "category_name": course.category.name if course.category else None,
-                    "teacher_name": course.teacher.username if course.teacher else None,
-                    "created_at": course.created_at,
-                    "updated_at": course.updated_at,
-                    "enrollment_count": getattr(course, 'enrollment_count', 0)
-                } for course in courses
-            ],
-            "pagination": {
-                "page": page,
-                "size": size,
-                "total": total,
-                "pages": (total + size - 1) // size
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error getting courses for management: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取课程列表失败")
 
-@router.put("/courses/{course_id}/status")
-@require_permission(Permissions.UPDATE_COURSE)
-async def update_course_status(
-    course_id: str,
-    status: str,
-    reason: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """更新课程状态
-    
-    超级管理员可以上架、下架或归档课程
-    """
-    try:
-        course = db.query(Course).filter(Course.id == course_id).first()
-        if not course:
-            raise HTTPException(status_code=404, detail="课程不存在")
-        
-        valid_statuses = ['draft', 'published', 'archived', 'suspended']
-        if status not in valid_statuses:
-            raise HTTPException(status_code=400, detail="无效的课程状态")
-        
-        old_status = getattr(course, 'status')
-        setattr(course, 'status', status)
-        setattr(course, 'updated_at', datetime.utcnow())
-        
-        db.commit()
-        
-        logger.info(f"Superadmin {current_user.username} changed course {course_id} status from {old_status} to {status}")
-        
-        return {
-            "message": "课程状态更新成功",
-            "course_id": course_id,
-            "old_status": old_status,
-            "new_status": status,
-            "reason": reason
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating course status: {str(e)}")
-        raise HTTPException(status_code=500, detail="更新课程状态失败")
 
 @router.post("/courses/{course_id}/promotion")
 @require_permission(Permissions.MANAGE_PROMOTIONS)
@@ -492,10 +378,11 @@ async def create_promotion(
             raise HTTPException(status_code=404, detail="课程不存在")
         
         # 计算折扣价格
+        course_price = float(course.price) if course.price is not None else 0.0
         if promotion.discount_type == 'percentage':
-            discount_price = course.price * (1 - promotion.discount_value / 100)
+            discount_price = course_price * (1 - promotion.discount_value / 100)
         else:  # fixed_amount
-            discount_price = course.price - promotion.discount_value
+            discount_price = course_price - promotion.discount_value
         
         if discount_price < 0:
             raise HTTPException(status_code=400, detail="折扣价格不能为负数")
@@ -551,6 +438,59 @@ async def get_categories_management(
         logger.error(f"Error getting categories management: {str(e)}")
         raise HTTPException(status_code=500, detail="获取分类管理失败")
 
+@router.get("/tags/management")
+@require_permission(Permissions.MANAGE_COURSE_CATEGORIES)
+async def get_tags_management(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取课程标签管理
+    
+    超级管理员可以管理所有课程标签
+    """
+    try:
+        # 由于标签模型可能还没有完全实现，先返回模拟数据
+        tags = [
+            {
+                "id": "1",
+                "name": "Python",
+                "description": "Python编程语言",
+                "color": "#3776ab",
+                "icon": "code",
+                "usage_count": 5,
+                "is_active": True,
+                "created_at": datetime.now()
+            },
+            {
+                "id": "2",
+                "name": "JavaScript",
+                "description": "JavaScript编程语言",
+                "color": "#f7df1e",
+                "icon": "code",
+                "usage_count": 3,
+                "is_active": True,
+                "created_at": datetime.now()
+            },
+            {
+                "id": "3",
+                "name": "React",
+                "description": "React前端框架",
+                "color": "#61dafb",
+                "icon": "react",
+                "usage_count": 2,
+                "is_active": True,
+                "created_at": datetime.now()
+            }
+        ]
+        
+        return {
+            "tags": tags,
+            "total_tags": len(tags)
+        }
+    except Exception as e:
+        logger.error(f"Error getting tags management: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取标签管理失败")
+
 @router.get("/dashboard/stats")
 @require_permission(Permissions.VIEW_SYSTEM_LOGS)
 async def get_dashboard_stats(
@@ -601,3 +541,117 @@ async def get_dashboard_stats(
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {str(e)}")
         raise HTTPException(status_code=500, detail="获取统计数据失败")
+
+@router.get("/roles")
+@require_permission(Permissions.MANAGE_PERMISSIONS)
+async def get_roles(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取所有角色列表
+    
+    超级管理员可以查看所有可用的角色
+    """
+    from permission_utils import ROLE_PERMISSIONS, get_role_description
+    
+    try:
+        roles = []
+        for role, permissions in ROLE_PERMISSIONS.items():
+            roles.append({
+                "id": role,
+                "name": role,
+                "description": get_role_description(role),
+                "permissions": list(permissions),
+                "permission_count": len(permissions),
+                "created_at": datetime.utcnow().isoformat()
+            })
+        
+        return {
+            "roles": roles,
+            "total": len(roles)
+        }
+    except Exception as e:
+        logger.error(f"Error getting roles: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取角色列表失败")
+
+@router.get("/permissions")
+@require_permission(Permissions.MANAGE_PERMISSIONS)
+async def get_permissions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取所有权限列表
+    
+    超级管理员可以查看所有可用的权限
+    """
+    try:
+        permissions = []
+        
+        # 权限分类
+        permission_categories = {
+            "用户管理": ["view_users", "create_user", "update_user", "delete_user", "manage_user_roles"],
+            "课程管理": ["view_courses", "create_course", "update_course", "delete_course", "publish_course", "manage_course_categories"],
+            "订单管理": ["view_orders", "create_order", "update_order", "delete_order", "process_refunds"],
+            "会员管理": ["view_memberships", "create_membership", "update_membership", "delete_membership", "manage_membership_levels"],
+            "系统管理": ["view_system_logs", "manage_permissions", "system_backup", "system_restore", "manage_system_config"],
+            "内容管理": ["moderate_content", "manage_reviews", "manage_comments"],
+            "财务管理": ["view_financial_reports", "manage_pricing", "manage_promotions"],
+            "学习管理": ["view_learning_progress", "manage_learning_paths", "track_user_activity"]
+        }
+        
+        # 权限描述映射
+        permission_descriptions = {
+            "view_users": "查看用户列表",
+            "create_user": "创建新用户",
+            "update_user": "更新用户信息",
+            "delete_user": "删除用户",
+            "manage_user_roles": "管理用户角色",
+            "view_courses": "查看课程列表",
+            "create_course": "创建新课程",
+            "update_course": "更新课程信息",
+            "delete_course": "删除课程",
+            "publish_course": "发布课程",
+            "manage_course_categories": "管理课程分类",
+            "view_orders": "查看订单列表",
+            "create_order": "创建订单",
+            "update_order": "更新订单",
+            "delete_order": "删除订单",
+            "process_refunds": "处理退款",
+            "view_memberships": "查看会员信息",
+            "create_membership": "创建会员",
+            "update_membership": "更新会员信息",
+            "delete_membership": "删除会员",
+            "manage_membership_levels": "管理会员等级",
+            "view_system_logs": "查看系统日志",
+            "manage_permissions": "管理权限",
+            "system_backup": "系统备份",
+            "system_restore": "系统恢复",
+            "manage_system_config": "管理系统配置",
+            "moderate_content": "内容审核",
+            "manage_reviews": "管理评价",
+            "manage_comments": "管理评论",
+            "view_financial_reports": "查看财务报表",
+            "manage_pricing": "管理定价",
+            "manage_promotions": "管理促销活动",
+            "view_learning_progress": "查看学习进度",
+            "manage_learning_paths": "管理学习路径",
+            "track_user_activity": "跟踪用户活动"
+        }
+        
+        for category, perms in permission_categories.items():
+            for perm in perms:
+                permissions.append({
+                    "id": perm,
+                    "name": perm,
+                    "description": permission_descriptions.get(perm, perm),
+                    "category": category
+                })
+        
+        return {
+            "permissions": permissions,
+            "total": len(permissions),
+            "categories": list(permission_categories.keys())
+        }
+    except Exception as e:
+        logger.error(f"Error getting permissions: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取权限列表失败")

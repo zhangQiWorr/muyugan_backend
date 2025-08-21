@@ -22,6 +22,7 @@ from utils.file_upload import save_avatar_file, delete_avatar_files, get_default
 logger = get_logger("auth_api")
 router = APIRouter(prefix="/auth", tags=["认证"])
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
 
 
 def get_auth_handler():
@@ -41,10 +42,13 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
     """获取当前认证用户（可选，用于公开接口）"""
+    if not credentials:
+        return None
+    
     try:
         token = credentials.credentials
         auth_handler = get_auth_handler()

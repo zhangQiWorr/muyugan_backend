@@ -16,8 +16,8 @@ from utils.logger import get_logger
 logger = get_logger("file_upload")
 
 # 配置
-UPLOAD_DIR = "static/uploads"
-AVATAR_DIR = "static/avatars"
+UPLOAD_DIR = "static/images/src_avatars"
+AVATAR_DIR = "static/images/avatars"
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
 AVATAR_SIZES = {

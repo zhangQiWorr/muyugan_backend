@@ -98,9 +98,12 @@ class CourseCategoryCreate(CourseCategoryBase):
     pass
 
 
-class CourseCategoryUpdate(CourseCategoryBase):
+class CourseCategoryUpdate(BaseSchema):
     name: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+    icon: Optional[str] = Field(None, max_length=100)
     sort_order: Optional[int] = None
+    parent_id: Optional[str] = None
 
 
 class CourseCategoryResponse(CourseCategoryBase):
@@ -132,13 +135,18 @@ class ConversationCreate(BaseModel):
     agent_id: Optional[str] = None
 
 class CourseLessonCreate(CourseLessonBase):
-    course_id: str
+    pass
 
 
-class CourseLessonUpdate(CourseLessonBase):
+class CourseLessonUpdate(BaseSchema):
     title: Optional[str] = Field(None, max_length=200)
+    description: Optional[str] = None
     content_type: Optional[str] = None
+    content_url: Optional[str] = Field(None, max_length=500)
+    content_text: Optional[str] = None
     duration: Optional[int] = Field(None, ge=0)
+    sort_order: Optional[int] = None
+    is_free: Optional[bool] = None
 
 
 class CourseLessonResponse(CourseLessonBase):
@@ -168,11 +176,21 @@ class CourseCreate(CourseBase):
     pass
 
 
-class CourseUpdate(CourseBase):
+class CourseUpdate(BaseSchema):
     title: Optional[str] = Field(None, max_length=200)
     subtitle: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = None
+    cover_image: Optional[str] = Field(None, max_length=500)
+    category_id: Optional[str] = None
+    tags: Optional[List[str]] = None
     price: Optional[float] = Field(None, ge=0)
     original_price: Optional[float] = Field(None, ge=0)
+    is_free: Optional[bool] = None
+    is_member_only: Optional[bool] = None
+    difficulty_level: Optional[str] = None
+    language: Optional[str] = None
+    status: Optional[str] = None
+
 
 
 class CourseResponse(CourseBase):
@@ -495,7 +513,7 @@ class ImageInfoResponse(BaseModel):
     updated_at: datetime
 
 # 代理相关Schema
-class AgentCreate(BaseModel):
+class AgentCreateV2(BaseModel):
     name: str
     description: Optional[str] = None
     agent_type: str

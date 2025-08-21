@@ -34,6 +34,7 @@ from api.orders import router as orders_router
 from api.learning import router as learning_router
 from api.membership import router as membership_router
 from api.superadmin import router as superadmin_router
+from api.lesson_materials import router as lesson_router
 
 # 获取主应用logger
 logger = get_logger("main")
@@ -169,9 +170,13 @@ async def lifespan(app: FastAPI):
             
             # 初始化检查点存储
             try:
-                with PostgresSaver.from_conn_string(os.getenv("DATABASE_URL")) as checkpointer:
-                    checkpointer.setup()
-                    logger.info("✅ PostgreSQL检查点存储已初始化")
+                database_url = os.getenv("DATABASE_URL")
+                if database_url:
+                    with PostgresSaver.from_conn_string(database_url) as checkpointer:
+                        checkpointer.setup()
+                        logger.info("✅ PostgreSQL检查点存储已初始化")
+                else:
+                    logger.warning("⚠️ DATABASE_URL环境变量未设置，跳过PostgreSQL检查点存储初始化")
             except Exception as e:
                 logger.warning(f"⚠️ PostgreSQL连接失败，使用内存存储: {e}")
                 checkpointer = MemorySaver()
@@ -252,14 +257,15 @@ app.add_middleware(AuditMiddleware)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(video_router)
-app.include_router(images_router)
+app.include_router(images_router, prefix="/api")
 
-# 注册知识付费相关路由
-app.include_router(courses_router)
+# 知识付费相关路由注册
+app.include_router(courses_router, prefix="/api")
 app.include_router(orders_router)
 app.include_router(learning_router)
 app.include_router(membership_router)
 app.include_router(superadmin_router)
+app.include_router(lesson_router, prefix="/api")
 
 # 健康检查
 @app.get("/health")
