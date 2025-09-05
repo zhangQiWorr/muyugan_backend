@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import json
 
-from .logger import get_logger, EnhancedLogger
+from services.logger import get_logger, EnhancedLogger
 
 logger = get_logger("middleware")
 api_logger = EnhancedLogger.get_api_logger()

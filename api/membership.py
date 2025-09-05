@@ -3,9 +3,8 @@
 包含会员等级管理、会员购买、权益管理等
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, asc
 from typing import List, Optional
 import uuid
 from datetime import datetime, timedelta
@@ -14,16 +13,15 @@ from models import get_db
 from models.user import User
 from models.membership import (
     MembershipLevel, UserMembership, MembershipOrder,
-    MembershipBenefit, UserBenefitUsage,
-    MembershipType, MembershipStatus
+    MembershipBenefit, MembershipType, MembershipStatus
 )
 from models.schemas import (
     MembershipLevelCreate, MembershipLevelResponse,
     MembershipCreate, MembershipResponse,
-    SuccessResponse, PaginationParams
+    SuccessResponse
 )
-from utils.logger import get_logger
-from utils.auth_utils import get_current_user, get_current_user_optional, check_admin_permission, check_superadmin_permission
+from services.logger import get_logger
+from utils.auth_utils import get_current_user, get_current_user_optional, check_admin_permission
 
 logger = get_logger("membership_api")
 router = APIRouter(prefix="/membership", tags=["会员管理"])

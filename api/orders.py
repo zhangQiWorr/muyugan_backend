@@ -5,7 +5,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, asc
 from typing import List, Optional
 import uuid
 from datetime import datetime, timedelta
@@ -21,10 +20,10 @@ from models.schemas import (
     OrderCreate, OrderResponse, OrderListResponse,
     PaymentCreate, PaymentResponse,
     CouponCreate, CouponResponse, UserCouponResponse,
-    SuccessResponse, PaginationParams
+    SuccessResponse
 )
-from utils.logger import get_logger
-from utils.auth_utils import get_current_user, get_current_user_optional, check_admin_permission
+from services.logger import get_logger
+from utils.auth_utils import get_current_user, check_admin_permission
 
 logger = get_logger("orders_api")
 router = APIRouter(prefix="/orders", tags=["订单支付"])

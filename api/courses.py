@@ -4,30 +4,26 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc, func
 from typing import List, Optional, Dict, Any
-import uuid
-import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 from models import get_db
 from models.user import User
-from models.course import Course, CourseCategory, CourseLesson, CourseStatus, ContentType
+from models.course import Course, CourseCategory, CourseLesson, CourseStatus
 from models.promotion import CoursePromotion, PromotionType, PromotionStatus, CourseTag, CourseTagRelation
 from models.schemas import (
     CourseCreate, CourseUpdate, CourseResponse, CourseListResponse,
     CourseCategoryCreate, CourseCategoryUpdate, CourseCategoryResponse,
     CourseLessonCreate, CourseLessonUpdate, CourseLessonResponse,
-    PaginationParams, SuccessResponse
+    SuccessResponse
 )
-from utils.logger import get_logger
+from services.logger import get_logger
 from utils.auth_utils import get_current_user, get_current_user_optional, check_admin_permission
-from utils.media_utils import get_media_duration, is_media_file
-from permission_utils import require_permission, Permissions
 
 logger = get_logger("courses_merged_api")
 router = APIRouter(prefix="/courses", tags=["课程管理"])
@@ -420,11 +416,14 @@ async def update_tag(
             raise HTTPException(status_code=400, detail="标签名称已存在")
         
         # 更新标签信息
-        tag.name = request.name
-        tag.description = request.description
-        tag.color = request.color
-        tag.icon = request.icon
-        tag.updated_at = datetime.utcnow()
+        for attr, value in {
+            'name': request.name,
+            'description': request.description,
+            'color': request.color,
+            'icon': request.icon,
+            'updated_at': datetime.utcnow()
+        }.items():
+            setattr(tag, attr, value)
         
         db.commit()
         db.refresh(tag)
@@ -832,11 +831,24 @@ async def create_lesson(
             detail="课程不存在"
         )
 
-    lesson_data.duration = lesson_data.duration * 60
-    lesson = CourseLesson(**lesson_data.dict(), course_id=course_id)
+    # 提取media_ids并从lesson_data中移除，避免传递给CourseLesson构造函数
+    media_ids = lesson_data.media_ids
+    lesson_dict = lesson_data.dict(exclude={'media_ids'})
+    lesson_dict['duration'] = lesson_dict['duration'] * 60
+    
+    lesson = CourseLesson(**lesson_dict, course_id=course_id)
     db.add(lesson)
     db.commit()
     db.refresh(lesson)
+    
+    # 如果提供了媒体文件ID，将课时ID关联到这些媒体文件
+    if media_ids:
+        from models.media import Media
+        for media_id in media_ids:
+            media = db.query(Media).filter(Media.id == media_id).first()
+            if media:
+                media.lesson_id = lesson.id
+        db.commit()
     
     # 更新课程课时数量
     lesson_count = db.query(CourseLesson).filter(
@@ -979,132 +991,6 @@ def handle_lesson_media_range_request(request: Request, file_path: str, file_siz
         status_code=206,
         headers=headers
     )
-
-@router.get("/lessons/{lesson_id}/play")
-async def play_lesson_media(
-    lesson_id: str,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """播放课时媒体文件（支持视频和音频流式播放）"""
-    try:
-        # 查找课时
-        lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
-        if not lesson:
-            raise HTTPException(status_code=404, detail="课时不存在")
-        
-        # 查找课程
-        course = db.query(Course).filter(Course.id == lesson.course_id).first()
-        if not course:
-            raise HTTPException(status_code=404, detail="课程不存在")
-        
-        # 权限检查
-        is_admin = current_user.role in ['admin', 'superadmin']
-        
-        # 管理员可以访问所有内容
-        if not is_admin:
-            # 检查课程是否已发布
-            if course.status != CourseStatus.PUBLISHED:
-                raise HTTPException(status_code=403, detail="课程未发布")
-            
-            # 检查是否为付费课程且用户是否已购买
-            if course.price > 0 and not lesson.is_free:
-                # 这里需要检查用户是否已购买课程
-                # 可以根据实际的购买记录表来实现
-                # enrollment = db.query(CourseEnrollment).filter(
-                #     CourseEnrollment.user_id == current_user.id,
-                #     CourseEnrollment.course_id == course.id
-                # ).first()
-                # if not enrollment:
-                #     raise HTTPException(status_code=403, detail="请先购买课程")
-                pass
-        
-        # 检查内容类型是否为视频或音频
-        if lesson.content_type not in [ContentType.VIDEO, ContentType.AUDIO]:
-            raise HTTPException(status_code=400, detail="该课时不是视频或音频内容")
-        
-        # 获取媒体文件路径
-        if not lesson.content_url:
-            raise HTTPException(status_code=404, detail="媒体文件不存在")
-        
-        # 将相对路径转换为绝对路径
-        if lesson.content_url.startswith('/static/'):
-            file_path = lesson.content_url[1:]  # 去掉开头的 '/'
-        else:
-            file_path = lesson.content_url
-        
-        # 检查文件是否存在
-        if not os.path.exists(file_path):
-            logger.error(f"媒体文件不存在: {file_path}")
-            raise HTTPException(status_code=404, detail="媒体文件不存在")
-        
-        # 获取文件大小
-        file_size = os.path.getsize(file_path)
-        
-        # 根据文件扩展名确定MIME类型
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        # 视频MIME类型
-        video_mime_types = {
-            '.mp4': 'video/mp4',
-            '.mov': 'video/quicktime',
-            '.avi': 'video/x-msvideo',
-            '.mkv': 'video/x-matroska',
-            '.webm': 'video/webm',
-            '.flv': 'video/x-flv',
-            '.wmv': 'video/x-ms-wmv'
-        }
-        
-        # 音频MIME类型
-        audio_mime_types = {
-            '.mp3': 'audio/mpeg',
-            '.wav': 'audio/wav',
-            '.flac': 'audio/flac',
-            '.aac': 'audio/aac',
-            '.ogg': 'audio/ogg',
-            '.m4a': 'audio/mp4',
-            '.wma': 'audio/x-ms-wma'
-        }
-        
-        # 确定内容类型
-        if lesson.content_type == ContentType.VIDEO:
-            content_type = video_mime_types.get(file_ext, 'video/mp4')
-            media_type = "视频"
-        elif lesson.content_type == ContentType.AUDIO:
-            content_type = audio_mime_types.get(file_ext, 'audio/mpeg')
-            media_type = "音频"
-        else:
-            content_type = 'application/octet-stream'
-            media_type = "媒体"
-        
-        # 记录播放日志
-        logger.info(f"用户 {current_user.username} 播放课时{media_type}: {lesson.title} (ID: {lesson_id})")
-        
-        # 处理Range请求（支持音视频拖拽和流式播放）
-        range_response = handle_lesson_media_range_request(request, file_path, file_size, content_type)
-        if range_response:
-            return range_response
-        
-        # 返回完整文件
-        headers = {
-            'Accept-Ranges': 'bytes',
-            'Content-Length': str(file_size),
-            'Cache-Control': 'public, max-age=3600',
-            'Content-Type': content_type
-        }
-        
-        return FileResponse(
-            path=file_path,
-            media_type=content_type,
-            headers=headers
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"播放课时媒体文件失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="播放媒体文件失败")
 
 @router.put("/lessons/reorder", response_model=SuccessResponse)
 async def reorder_lessons(
@@ -1425,18 +1311,25 @@ async def get_lesson_detail(
             )
         
         # 如果课时不是免费的，需要检查用户是否已报名课程
-        if not lesson.is_free:
+        lesson_is_free = getattr(lesson, 'is_free', True)
+        if not lesson_is_free:
             from models.course import CourseEnrollment
-            enrollment = db.query(CourseEnrollment).filter(
-                CourseEnrollment.user_id == current_user.id,
-                CourseEnrollment.course_id == lesson.course_id,
-                CourseEnrollment.is_active == True
-            ).first()
-            
-            if not enrollment:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="需要报名课程才能查看此课时"
-                )
+            lesson_course_id = getattr(lesson, 'course_id', None)
+            if lesson_course_id:
+                user_id = getattr(current_user, 'id', None)
+                if user_id:
+                    enrollment = db.query(CourseEnrollment).filter(
+                        CourseEnrollment.user_id == user_id,
+                        CourseEnrollment.course_id == lesson_course_id,
+                        CourseEnrollment.is_active == True
+                    ).first()
+                else:
+                    enrollment = None
+                
+                if not enrollment:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="需要报名课程才能查看此课时"
+                    )
     
     return lesson

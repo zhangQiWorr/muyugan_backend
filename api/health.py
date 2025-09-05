@@ -11,7 +11,7 @@ from models import get_db
 from models.user import User
 from models.agent import Agent
 from models.conversation import Conversation, Message
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("health_api")
 router = APIRouter(tags=["健康检查和统计"])

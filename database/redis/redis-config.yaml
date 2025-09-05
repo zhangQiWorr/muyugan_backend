@@ -1,0 +1,239 @@
+# Redis Master Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-master-config
+  labels:
+    app: redis
+    role: master
+data:
+  redis.conf: |
+    # Network
+    bind 0.0.0.0
+    port 6379
+    protected-mode no
+    
+    # General
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_6379.pid
+    loglevel notice
+    logfile ""
+    databases 16
+    
+    # Security
+    requirepass ${REDIS_PASSWORD}
+    
+    # Persistence
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    
+    # AOF
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    aof-load-truncated yes
+    aof-use-rdb-preamble yes
+    
+    # Memory Management
+    maxmemory 1536mb
+    maxmemory-policy allkeys-lru
+    maxmemory-samples 5
+    
+    # Lazy Freeing
+    lazyfree-lazy-eviction yes
+    lazyfree-lazy-expire yes
+    lazyfree-lazy-server-del yes
+    replica-lazy-flush yes
+    
+    # Threaded I/O
+    io-threads 4
+    io-threads-do-reads yes
+    
+    # Slow Log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+    # Client Output Buffer Limits
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+    
+    # TCP Settings
+    tcp-keepalive 300
+    tcp-backlog 511
+    timeout 0
+    
+    # Replication
+    repl-diskless-sync yes
+    repl-diskless-sync-delay 5
+    repl-ping-replica-period 10
+    repl-timeout 60
+    repl-disable-tcp-nodelay no
+    repl-backlog-size 1mb
+    repl-backlog-ttl 3600
+    
+    # Monitoring
+    latency-monitor-threshold 100
+    
+---
+# Redis Replica Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-replica-config
+  labels:
+    app: redis
+    role: replica
+data:
+  redis.conf: |
+    # Network
+    bind 0.0.0.0
+    port 6379
+    protected-mode no
+    
+    # General
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_6379.pid
+    loglevel notice
+    logfile ""
+    databases 16
+    
+    # Security
+    requirepass ${REDIS_PASSWORD}
+    masterauth ${REDIS_PASSWORD}
+    
+    # Replication
+    replicaof redis-master-service 6379
+    replica-serve-stale-data yes
+    replica-read-only yes
+    repl-diskless-sync yes
+    repl-diskless-sync-delay 5
+    repl-ping-replica-period 10
+    repl-timeout 60
+    repl-disable-tcp-nodelay no
+    repl-backlog-size 1mb
+    repl-backlog-ttl 3600
+    replica-priority 100
+    
+    # Persistence
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    
+    # AOF
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    aof-load-truncated yes
+    aof-use-rdb-preamble yes
+    
+    # Memory Management
+    maxmemory 768mb
+    maxmemory-policy allkeys-lru
+    maxmemory-samples 5
+    
+    # Lazy Freeing
+    lazyfree-lazy-eviction yes
+    lazyfree-lazy-expire yes
+    lazyfree-lazy-server-del yes
+    replica-lazy-flush yes
+    
+    # Threaded I/O
+    io-threads 2
+    io-threads-do-reads yes
+    
+    # Slow Log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+    # Client Output Buffer Limits
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+    
+    # TCP Settings
+    tcp-keepalive 300
+    tcp-backlog 511
+    timeout 0
+    
+    # Monitoring
+    latency-monitor-threshold 100
+    
+---
+# Redis Sentinel Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  labels:
+    app: redis-sentinel
+data:
+  sentinel.conf: |
+    # Sentinel Configuration
+    port 26379
+    bind 0.0.0.0
+    
+    # Monitor master
+    sentinel monitor mymaster redis-master-service 6379 2
+    sentinel auth-pass mymaster ${REDIS_PASSWORD}
+    
+    # Timeouts
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel parallel-syncs mymaster 1
+    sentinel failover-timeout mymaster 10000
+    
+    # Notification scripts
+    # sentinel notification-script mymaster /var/redis/notify.sh
+    # sentinel client-reconfig-script mymaster /var/redis/reconfig.sh
+    
+    # Logging
+    logfile ""
+    loglevel notice
+    
+    # Security
+    requirepass ${REDIS_PASSWORD}
+    
+    # Deny dangerous commands
+    sentinel deny-scripts-reconfig yes
+---
+# Redis Credentials Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-credentials
+  labels:
+    app: redis
+type: Opaque
+stringData:
+  password: "your-secure-redis-password-change-in-production"
+---
+# PostgreSQL Credentials Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  labels:
+    app: postgres
+type: Opaque
+stringData:
+  password: "your-secure-postgres-password-change-in-production"
+  replication-password: "your-secure-replication-password-change-in-production"

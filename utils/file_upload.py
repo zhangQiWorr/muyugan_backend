@@ -2,16 +2,14 @@
 文件上传工具
 处理用户头像等文件上传功能
 """
-
 import os
 import uuid
-import shutil
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
 from fastapi import UploadFile, HTTPException, status
 from PIL import Image
 import io
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("file_upload")
 
@@ -170,7 +168,6 @@ async def save_avatar_file(file: UploadFile, user_id: str) -> dict:
             detail=f"头像文件保存失败: {str(e)}"
         )
 
-
 def delete_avatar_files(avatar_url: str):
     """
     删除头像文件
@@ -206,4 +203,4 @@ def delete_avatar_files(avatar_url: str):
 
 def get_default_avatar_url() -> str:
     """获取默认头像URL"""
-    return "/static/avatars/default_avatar.png" 
+    return "/static/avatars/default_avatar.png"

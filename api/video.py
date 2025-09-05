@@ -7,9 +7,8 @@ import os
 import uuid
 import cv2
 import ffmpeg
-import shutil
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -18,9 +17,9 @@ import re
 from models.user import User
 from api.auth import get_current_user
 from models import get_db
-from models.schemas import VideoUploadRequest, VideoInfoResponse, VideoListResponse
+from models.schemas import VideoInfoResponse, VideoListResponse
 from models.video import Video
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("video_api")
 

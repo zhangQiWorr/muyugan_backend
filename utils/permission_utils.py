@@ -5,12 +5,9 @@
 from enum import Enum
 from functools import wraps
 from typing import Set, Dict, List
-from fastapi import HTTPException, Depends
-from sqlalchemy.orm import Session
-from models import get_db
+from fastapi import HTTPException
 from models.user import User
-from utils.auth_utils import get_current_user
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("permission_utils")
 

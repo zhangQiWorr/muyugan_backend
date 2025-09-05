@@ -1,0 +1,206 @@
+# PostgreSQL Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  labels:
+    app: postgres
+    role: primary
+data:
+  postgresql.conf: |
+    # Connection Settings
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 200
+    superuser_reserved_connections = 3
+    
+    # Memory Settings
+    shared_buffers = 1GB
+    effective_cache_size = 3GB
+    work_mem = 16MB
+    maintenance_work_mem = 256MB
+    
+    # WAL Settings
+    wal_level = replica
+    max_wal_senders = 10
+    max_replication_slots = 10
+    wal_keep_size = 1GB
+    archive_mode = on
+    archive_command = 'cp %p /var/lib/postgresql/archive/%f'
+    
+    # Checkpoint Settings
+    checkpoint_completion_target = 0.9
+    checkpoint_timeout = 15min
+    max_wal_size = 2GB
+    min_wal_size = 1GB
+    
+    # Query Planner
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    
+    # Logging
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = 'log'
+    log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+    log_rotation_age = 1d
+    log_rotation_size = 100MB
+    log_min_duration_statement = 1000
+    log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+    log_checkpoints = on
+    log_connections = on
+    log_disconnections = on
+    log_lock_waits = on
+    log_temp_files = 0
+    
+    # Performance
+    shared_preload_libraries = 'pg_stat_statements'
+    track_activity_query_size = 2048
+    track_counts = on
+    track_functions = all
+    
+    # Autovacuum
+    autovacuum = on
+    autovacuum_max_workers = 3
+    autovacuum_naptime = 1min
+    autovacuum_vacuum_threshold = 50
+    autovacuum_analyze_threshold = 50
+    autovacuum_vacuum_scale_factor = 0.1
+    autovacuum_analyze_scale_factor = 0.05
+    
+    # Hot Standby
+    hot_standby = on
+    hot_standby_feedback = on
+    
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    
+    # "local" is for Unix domain socket connections only
+    local   all             all                                     trust
+    
+    # IPv4 local connections:
+    host    all             all             127.0.0.1/32            md5
+    host    all             all             0.0.0.0/0               md5
+    
+    # IPv6 local connections:
+    host    all             all             ::1/128                 md5
+    
+    # Replication connections
+    host    replication     replicator      0.0.0.0/0               md5
+    host    replication     replicator      ::0/0                   md5
+    
+    # Allow connections from Kubernetes pods
+    host    all             all             10.0.0.0/8              md5
+    host    all             all             172.16.0.0/12           md5
+    host    all             all             192.168.0.0/16          md5
+---
+# PostgreSQL Replica Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-replica-config
+  labels:
+    app: postgres
+    role: replica
+data:
+  postgresql.conf: |
+    # Connection Settings
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 100
+    
+    # Memory Settings
+    shared_buffers = 512MB
+    effective_cache_size = 1536MB
+    work_mem = 8MB
+    maintenance_work_mem = 128MB
+    
+    # WAL Settings
+    wal_level = replica
+    max_wal_senders = 0
+    
+    # Hot Standby Settings
+    hot_standby = on
+    hot_standby_feedback = on
+    max_standby_streaming_delay = 30s
+    max_standby_archive_delay = 30s
+    
+    # Recovery Settings
+    primary_conninfo = 'host=postgres-primary-service port=5432 user=replicator'
+    primary_slot_name = 'replica_slot'
+    
+    # Logging
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = 'log'
+    log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+    log_rotation_age = 1d
+    log_rotation_size = 100MB
+    log_min_duration_statement = 1000
+    log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+    
+    # Performance
+    shared_preload_libraries = 'pg_stat_statements'
+    track_activity_query_size = 2048
+    track_counts = on
+    track_functions = all
+---
+# PostgreSQL Initialization Scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  labels:
+    app: postgres
+    role: primary
+data:
+  01-create-replication-user.sql: |
+    -- Create replication user
+    CREATE USER replicator WITH REPLICATION ENCRYPTED PASSWORD '${POSTGRES_REPLICATION_PASSWORD}';
+    
+    -- Create replication slot
+    SELECT pg_create_physical_replication_slot('replica_slot');
+    
+  02-create-extensions.sql: |
+    -- Create extensions
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    CREATE EXTENSION IF NOT EXISTS uuid-ossp;
+    
+  03-performance-tuning.sql: |
+    -- Performance tuning
+    ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';
+    ALTER SYSTEM SET track_activity_query_size = 2048;
+    ALTER SYSTEM SET pg_stat_statements.track = 'all';
+    
+---
+# PostgreSQL Replica Scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-replica-scripts
+  labels:
+    app: postgres
+    role: replica
+data:
+  01-setup-replica.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Wait for primary to be ready
+    until pg_isready -h postgres-primary-service -p 5432 -U postgres; do
+      echo "Waiting for primary database..."
+      sleep 2
+    done
+    
+    # Create base backup from primary
+    if [ ! -f "$PGDATA/PG_VERSION" ]; then
+      echo "Creating base backup from primary..."
+      pg_basebackup -h postgres-primary-service -D $PGDATA -U replicator -v -P -W
+      
+      # Create standby.signal file
+      touch $PGDATA/standby.signal
+      
+      # Set permissions
+      chmod 700 $PGDATA
+    fi

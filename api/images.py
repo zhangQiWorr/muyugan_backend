@@ -5,20 +5,17 @@
 
 import os
 import uuid
-import shutil
 from datetime import datetime
-from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-import re
 from PIL import Image
 import io
 
 from models.user import User
 from api.auth import get_current_user
 from models import get_db
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("image_api")
 

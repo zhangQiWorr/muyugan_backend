@@ -30,19 +30,22 @@ class StructuredFormatter(logging.Formatter):
         
         # 添加异常信息
         if record.exc_info:
+            exc_type = record.exc_info[0]
             log_data["exception"] = {
-                "type": record.exc_info[0].__name__,
-                "message": str(record.exc_info[1]),
+                "type": getattr(exc_type, '__name__', str(exc_type)) if exc_type else None,
+                "message": str(record.exc_info[1]) if record.exc_info[1] else None,
                 "traceback": traceback.format_exception(*record.exc_info)
             }
         
         # 添加额外字段
-        if hasattr(record, 'extra_fields'):
-            log_data.update(record.extra_fields)
+        extra_fields = getattr(record, 'extra_fields', None)
+        if extra_fields:
+            log_data.update(extra_fields)
         
         # 添加性能指标
-        if hasattr(record, 'performance'):
-            log_data['performance'] = record.performance
+        performance_data = getattr(record, 'performance', None)
+        if performance_data:
+            log_data['performance'] = performance_data
         
         return json.dumps(log_data, ensure_ascii=False, default=str)
 
@@ -203,6 +206,10 @@ class EnhancedLogger:
     @classmethod
     def get_logger(cls, name: str) -> logging.Logger:
         """获取指定名称的日志器"""
+        # 确保日志系统已初始化
+        if not cls._handlers:
+            cls._setup_logging()
+            
         if name not in cls._loggers:
             logger = logging.getLogger(name)
             logger.setLevel(logging.DEBUG)
@@ -291,4 +298,4 @@ def log_performance(operation: str):
             with performance_logger(logger, operation):
                 return func(*args, **kwargs)
         return wrapper
-    return decorator 
+    return decorator

@@ -3,14 +3,14 @@
 提供通用的认证相关函数
 """
 
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from models import get_db
 from models.user import User
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("auth_utils")
 security = HTTPBearer()

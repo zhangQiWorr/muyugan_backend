@@ -3,10 +3,8 @@
 """
 import pytest
 import time
-import asyncio
-from typing import List
 from fastapi.testclient import TestClient
-from utils.logger import log_performance
+
 
 @pytest.mark.performance
 def test_api_response_time(client: TestClient):

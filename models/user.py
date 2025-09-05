@@ -47,6 +47,9 @@ class User(Base):
     balance = relationship("UserBalance", back_populates="user", cascade="all, delete-orphan", uselist=False)
     user_coupons = relationship("UserCoupon", back_populates="user", cascade="all, delete-orphan")
     benefit_usage = relationship("UserBenefitUsage", back_populates="user", cascade="all, delete-orphan")
+    # 视频播放记录关系
+    media_play_records = relationship("MediaPlayRecord", back_populates="user", cascade="all, delete-orphan")
+    media_play_events = relationship("MediaPlayEvent", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username}, phone={self.phone}, email={self.email})>"
@@ -64,6 +67,6 @@ class User(Base):
             "is_verified": self.is_verified,
             "role": self.role,
             "preferences": self.preferences,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_login": self.last_login.isoformat() if self.last_login else None
+            "created_at": self.created_at.isoformat() if getattr(self, 'created_at', None) else None,
+            "last_login": self.last_login.isoformat() if getattr(self, 'last_login', None) else None
         }

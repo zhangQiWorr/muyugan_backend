@@ -4,18 +4,18 @@
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, func
-from datetime import datetime, timedelta
+from sqlalchemy import or_
+from datetime import datetime
 
 from models import get_db
 from models.user import User
-from models.course import Course, CourseCategory, CourseStatus
+from models.course import Course, CourseCategory
 from utils.auth_utils import get_current_user
-from permission_utils import require_permission, Permissions
+from utils.permission_utils import require_permission, Permissions
 from pydantic import BaseModel
-from utils.logger import get_logger
+from services.logger import get_logger
 from auth.password_handler import PasswordHandler
 
 logger = get_logger("superadmin_api")
@@ -330,7 +330,7 @@ async def get_audit_logs(
     超级管理员可以查看所有用户的操作审计日志
     """
     try:
-        from utils.audit_service import AuditService
+        from services.audit_service import AuditService
         
         # 使用审计服务查询日志
         result = AuditService.get_logs(

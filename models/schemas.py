@@ -135,7 +135,7 @@ class ConversationCreate(BaseModel):
     agent_id: Optional[str] = None
 
 class CourseLessonCreate(CourseLessonBase):
-    pass
+    media_ids: Optional[List[str]] = Field(None, description="关联的媒体文件ID列表")
 
 
 class CourseLessonUpdate(BaseSchema):
@@ -155,6 +155,7 @@ class CourseLessonResponse(CourseLessonBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    media_files: List['MediaInfoResponse'] = []
 
 
 class CourseBase(BaseSchema):
@@ -596,3 +597,82 @@ class HealthResponse(BaseModel):
 # 日志管理Schema
 class LogLevelRequest(BaseModel):
     level: str = Field(..., description="日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL")
+
+
+# 媒体文件相关Schema
+class MediaUploadRequest(BaseModel):
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class MediaInfoResponse(BaseModel):
+    id: str
+    description: Optional[str] = None
+    filename: str
+    filepath: str
+    media_type: str  # "video" or "audio"
+    cover_url: Optional[str] = None
+    duration: Optional[int] = None
+    size: Optional[int] = None
+    mime_type: Optional[str] = None
+    uploader_id: str
+    upload_time: Optional[datetime] = None
+    lesson_id: Optional[str] = None  # 关联的课时ID
+    
+    class Config:
+        from_attributes = True
+
+class MediaListResponse(BaseModel):
+    media: List[MediaInfoResponse]
+    total: Optional[int] = None
+    page: Optional[int] = None
+    size: Optional[int] = None
+
+# OSS同步相关Schema
+class OSSObjectInfo(BaseModel):
+    """OSS对象信息"""
+    key: str
+    size: int
+    etag: str
+    last_modified: datetime
+    storage_class: str
+    object_type: str = "Normal"
+
+class OSSSyncRequest(BaseModel):
+    """OSS同步请求"""
+    prefix: Optional[str] = Field(None, description="对象前缀过滤")
+    max_keys: Optional[int] = Field(1000, ge=1, le=1000, description="最大返回对象数量")
+    force_update: Optional[bool] = Field(False, description="是否强制更新已存在的对象")
+
+class OSSSyncResponse(BaseModel):
+    """OSS同步响应"""
+    success: bool
+    message: str
+    synced_count: int = 0
+    skipped_count: int = 0
+    error_count: int = 0
+    total_objects: int = 0
+    missing_files_count: int = 0
+    errors: List[str] = []
+
+class OSSObjectListResponse(BaseModel):
+    """OSS对象列表响应"""
+    objects: List[OSSObjectInfo]
+    total: int
+    is_truncated: bool = False
+    next_marker: Optional[str] = None
+
+# 播放事件上报相关数据模型
+class PlayEventData(BaseModel):
+    """播放事件数据模型"""
+    user_id: str
+    media_id: str  # 修改为 media_id 以匹配前端发送的字段
+    event_type: str  # play, pause, seek, heartbeat, ended
+    current_time: float
+    previous_time: Optional[float] = None
+    progress: Optional[float] = None
+    playback_rate: Optional[float] = 1.0
+    volume: Optional[float] = 1.0
+    is_fullscreen: Optional[bool] = False
+    is_ended: Optional[bool] = False
+    device_info: Optional[Dict[str, Any]] = None
+    extra_data: Optional[Dict[str, Any]] = None

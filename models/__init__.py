@@ -3,6 +3,10 @@ from .conversation import Conversation, Message
 from .agent import Agent, AgentConfig
 from .database import Base, engine, SessionLocal, get_db, create_tables
 from .audit_log import AuditLog
+from .media import Media
+# UserMediaAccess已合并到MediaPlayRecord中
+from .media_play_record import MediaPlayRecord
+from .media_play_event import MediaPlayEvent, EventType
 
 # 新增模型导入
 from .course import (
@@ -33,6 +37,11 @@ __all__ = [
     "get_db",
     "create_tables",
     "AuditLog",
+    "Media",
+    # "UserMediaAccess", # 已合并到MediaPlayRecord中
+    "MediaPlayRecord",
+    "MediaPlayEvent",
+    "EventType",
     # 新增模型
     "Course", "CourseLesson", "CourseCategory", "CourseEnrollment",
     "LearningProgress", "CourseReview", "CourseFavorite",

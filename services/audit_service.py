@@ -73,7 +73,7 @@ class AuditService:
         details: Optional[Dict[str, Any]] = None,
         status: str = "success",
         error_message: Optional[str] = None,
-        start_time: Optional[float] = None
+        start_time: Optional[float] = None,
     ) -> AuditLog:
         """从请求对象记录日志"""
         # 计算耗时
@@ -92,7 +92,7 @@ class AuditService:
         return AuditService.log_action(
             db=db,
             user_id=user.id if user else None,
-            username=user.username if user else None,
+            username=user.username,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,

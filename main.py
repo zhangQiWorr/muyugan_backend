@@ -17,15 +17,16 @@ from fastapi.staticfiles import StaticFiles
 # 自定义模块导入
 from models import SessionLocal, create_tables
 from auth.auth_handler import AuthHandler
-from utils.logger import get_logger
-from utils.middleware import APILoggingMiddleware, RequestContextMiddleware
+from services.logger import get_logger
+from services.middleware import APILoggingMiddleware, RequestContextMiddleware
 
 # API路由导入 - 基础功能
 from api import (
     auth_router,
     health_router,
     video_router,
-    images_router
+    images_router,
+    media_router
 )
 
 # 知识付费相关API路由导入
@@ -41,28 +42,47 @@ logger = get_logger("main")
 
 
 def setup_environment():
-    """设置默认环境变量"""
-    env_vars = {
-        "JWT_SECRET_KEY": "your-secret-key-here-please-change-in-production",
-        "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable",
-        "MAX_TOKENS": "30000",
-        "MAX_SUMMARY_TOKENS": "4096",
-        "LONG_MESSAGES_STRATEGY": "summarize",
-        "CONSOLE_LOG_LEVEL": "INFO",
-        "FILE_LOG_LEVEL": "INFO",
-        "TAVILY_API_KEY": "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",
-
-        "VISION_MODEL_NAME": "qwen-vl-max",
-        "VISION_MODEL_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "VISION_MODEL_API_KEY_NAME":"DASHSCOPE_API_KEY",
-        "DASHSCOPE_API_KEY":"sk-0ff6fec39a9f4b8597cde0b572bbd7af"
-    }
+    """从.env文件加载环境变量"""
+    from dotenv import load_dotenv
     
-    # 设置必需的环境变量
-    for key, default_value in env_vars.items():
-        if not os.getenv(key):
-            os.environ[key] = default_value
-            logger.debug(f"设置默认环境变量: {key}")
+    # 加载.env文件
+    env_file = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_file):
+        load_dotenv(env_file)
+        logger.info(f"已加载环境变量文件: {env_file}")
+    else:
+        logger.warning(f"环境变量文件不存在: {env_file}")
+    
+    # 检查必需的环境变量
+    required_vars = [
+        "JWT_SECRET_KEY",
+        "DATABASE_URL",
+        "MAX_TOKENS",
+        "MAX_SUMMARY_TOKENS",
+        "LONG_MESSAGES_STRATEGY",
+        "CONSOLE_LOG_LEVEL",
+        "FILE_LOG_LEVEL"
+    ]
+    
+    missing_vars = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        logger.warning(f"缺少以下环境变量: {', '.join(missing_vars)}")
+    
+    # 显示已加载的环境变量（不显示敏感信息）
+    loaded_vars = []
+    for key in os.environ:
+        if key in required_vars or key.startswith(('VISION_', 'OSS_', 'TAVILY_', 'DASHSCOPE_')):
+            if 'KEY' in key or 'SECRET' in key or 'PASSWORD' in key:
+                loaded_vars.append(f"{key}=***")
+            else:
+                loaded_vars.append(f"{key}={os.getenv(key)}")
+    
+    if loaded_vars:
+        logger.debug(f"已加载的环境变量: {', '.join(loaded_vars)}")
 
 
 def check_dependencies():
@@ -250,7 +270,7 @@ app.add_middleware(APILoggingMiddleware)
 app.add_middleware(RequestContextMiddleware)
 
 # 添加审计日志中间件
-from utils.audit_middleware import AuditMiddleware
+from services.audit_middleware import AuditMiddleware
 app.add_middleware(AuditMiddleware)
 
 # 注册基础路由
@@ -258,6 +278,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(video_router)
 app.include_router(images_router, prefix="/api")
+app.include_router(media_router, prefix="/api")
 
 # 知识付费相关路由注册
 app.include_router(courses_router, prefix="/api")

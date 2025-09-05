@@ -5,9 +5,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, asc, func
-from typing import List, Optional
-import uuid
+from sqlalchemy import func
+from typing import List
 from datetime import datetime
 
 from models import get_db
@@ -17,10 +16,10 @@ from models.schemas import (
     LearningProgressUpdate, LearningProgressResponse,
     CourseEnrollmentResponse, CourseReviewCreate, CourseReviewResponse,
     CourseFavoriteCreate, CourseFavoriteResponse,
-    SuccessResponse, PaginationParams
+    SuccessResponse
 )
-from utils.logger import get_logger
-from utils.auth_utils import get_current_user, get_current_user_optional
+from services.logger import get_logger
+from utils.auth_utils import get_current_user
 
 logger = get_logger("learning_api")
 router = APIRouter(prefix="/learning", tags=["学习管理"])

@@ -3,7 +3,8 @@
 """
 import os
 from typing import Optional, Dict, Any
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 class DatabaseSettings(BaseSettings):
     """数据库配置"""
@@ -61,9 +62,14 @@ class AISettings(BaseSettings):
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY", description="OpenAI API密钥")
     openai_base_url: Optional[str] = Field(default=None, env="OPENAI_BASE_URL", description="OpenAI基础URL")
     tavily_api_key: Optional[str] = Field(default=None, env="TAVILY_API_KEY", description="Tavily API密钥")
+    dashscope_api_key: Optional[str] = Field(default=None, env="DASHSCOPE_API_KEY", description="DashScope API密钥")
     max_tokens: int = Field(default=30000, env="MAX_TOKENS", description="最大令牌数")
     max_summary_tokens: int = Field(default=4096, env="MAX_SUMMARY_TOKENS", description="最大摘要令牌数")
+    long_messages_strategy: Optional[str] = Field(default=None, env="LONG_MESSAGES_STRATEGY", description="长消息处理策略")
     temperature: float = Field(default=0.7, env="AI_TEMPERATURE", description="AI温度参数")
+    vision_model_name: Optional[str] = Field(default=None, env="VISION_MODEL_NAME", description="视觉模型名称")
+    vision_model_base_url: Optional[str] = Field(default=None, env="VISION_MODEL_BASE_URL", description="视觉模型基础URL")
+    vision_model_api_key_name: Optional[str] = Field(default=None, env="VISION_MODEL_API_KEY_NAME", description="视觉模型API密钥名称")
 
 class FileUploadSettings(BaseSettings):
     """文件上传配置"""
@@ -108,6 +114,13 @@ class SecuritySettings(BaseSettings):
         description="bcrypt加密轮数"
     )
 
+class OSSSettings(BaseSettings):
+    """OSS配置"""
+    access_key_id: Optional[str] = Field(default=None, env="OSS_ACCESS_KEY_ID", description="OSS访问密钥ID")
+    access_key_secret: Optional[str] = Field(default=None, env="OSS_ACCESS_KEY_SECRET", description="OSS访问密钥Secret")
+    region: Optional[str] = Field(default=None, env="OSS_REGION", description="OSS区域")
+    bucket: Optional[str] = Field(default=None, env="OSS_BUCKET", description="OSS存储桶")
+
 class AppSettings(BaseSettings):
     """应用配置"""
     app_name: str = Field(default="Muyugan Backend", env="APP_NAME", description="应用名称")
@@ -125,6 +138,7 @@ class AppSettings(BaseSettings):
     ai: AISettings = AISettings()
     file_upload: FileUploadSettings = FileUploadSettings()
     security: SecuritySettings = SecuritySettings()
+    oss: OSSSettings = OSSSettings()
     
     class Config:
         env_file = ".env"

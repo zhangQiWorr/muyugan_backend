@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from models import get_db
 from models.user import User
-from models.conversation import Conversation, Message
+from models.conversation import Conversation
 from models.schemas import ConversationCreate, ConversationUpdate
 from api.auth import get_current_user
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("conversations_api")
 router = APIRouter(prefix="/conversations", tags=["对话管理"])

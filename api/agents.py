@@ -11,7 +11,7 @@ from models import get_db
 from models.user import User
 from models.schemas import AgentCreate
 from api.auth import get_current_user
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("agents_api")
 router = APIRouter(prefix="/agents", tags=["智能体管理"])

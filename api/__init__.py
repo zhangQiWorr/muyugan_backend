@@ -7,6 +7,7 @@ from .auth import router as auth_router
 from .health import router as health_router
 from .video import router as video_router
 from .images import router as images_router
+from .media import router as media_router
 
 # 知识付费相关路由
 from .courses import router as courses_router
@@ -21,6 +22,7 @@ base_routers = [
     "health_router",
     "video_router",
     "images_router",
+    "media_router",
     "courses_router",
     "orders_router",
     "learning_router",

@@ -1,16 +1,14 @@
 """审计日志中间件"""
 import time
 import json
-from typing import Callable, Optional, Dict, Any, Union
+from typing import Callable, Optional, Dict, Any
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
 from models.database import SessionLocal
 from models.user import User
-from utils.audit_service import AuditService
+from services.audit_service import AuditService
 from auth.jwt_handler import JWTHandler
 
 
@@ -28,10 +26,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
             "/health",
             "/static",
             "/api/superadmin/audit-logs",  # 排除审计日志查询接口
-            "api/superadmin/permissions",  # 排除权限查询接口
+            "/api/superadmin/permissions",  # 排除权限查询接口
             "/api/roles/permissions",  # 排除权限查询接口
             "/api/superadmin/roles",
-
             "/api/admin",  # 排除管理员接口
             "/metrics",  # 排除监控指标接口
             "/ping"  # 排除ping接口
@@ -43,8 +40,6 @@ class AuditMiddleware(BaseHTTPMiddleware):
         # 获取用户信息
         user = await self._get_user_from_request(request)
 
-        print("AuditMiddleware:", request.method, request.url.path, user)
-        
         # 检查是否需要跳过记录（包括超级管理员检查）
         if self._should_skip_logging(request, user):
             return await call_next(request)
@@ -56,7 +51,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         response = None
         status = "success"
         error_message = None
-        
+
         try:
             response = await call_next(request)
             
@@ -71,9 +66,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 status_code=500,
                 content={"detail": "Internal server error"}
             )
-        
+
+
         # 记录审计日志
-        print(f"About to log audit: path={request.url.path}, user={user}, skip={self._should_skip_logging(request, user)}")
         await self._log_request(
             request=request,
             user=user,
@@ -93,13 +88,19 @@ class AuditMiddleware(BaseHTTPMiddleware):
         """判断是否应该跳过日志记录"""
         path = request.url.path
         method = request.method
-        
+
+        if method == "HEADS" or method == "OPTIONS":
+            return True
+
         # 登录操作始终记录，即使是超级管理员
         if path == "/auth/login" and method == "POST":
             return False
+        # 登出操作始终记录，即使是超级管理员
+        if path == "/auth/logout" and method == "POST":
+            return False
             
         # 跳过超级管理员的其他操作
-        if user and str(user.role) == 'superadmin':
+        if user and str(user.role) == 'superadmin' and method == "GET" :
             return True
         
         # 跳过静态文件和文档路径
@@ -130,18 +131,36 @@ class AuditMiddleware(BaseHTTPMiddleware):
     async def _get_user_from_request(self, request: Request) -> Optional[User]:
         """从请求中获取用户信息"""
         try:
-            # 首先尝试从Authorization头获取token
-            auth_header = request.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.split(" ")[1]
-                
+            # 登录请求不使用token获取用户，改为从请求体的用户名解析
+            if request.url.path.endswith("/login") and request.method.upper() == "POST":
+                username = await self._get_username_from_request_body(request)
+                print(f"Username from request body: {username}")
+
+                if username:
+                    db = SessionLocal()
+                    try:
+                        user = db.query(User).filter(User.username == username).first()
+                        if user:
+                            return user
+                        user = db.query(User).filter(User.email == username).first()
+                        if user:
+                            return user
+                        user = db.query(User).filter(User.phone == username).first()
+                        if user:
+                            return user
+                    finally:
+                        db.close()
+
+            # 从多种位置尝试提取token
+            token = self._extract_token(request)
+            if token:
                 # 验证token并获取用户ID
                 payload = JWTHandler().verify_token(token)
-                
                 if payload:
                     # JWT token中使用'sub'字段存储用户ID
                     user_id = payload.get("sub") or payload.get("user_id")
                     if user_id:
+                        print(f"User ID from token: {user_id}")
                         # 从数据库获取用户信息
                         db = SessionLocal()
                         try:
@@ -150,98 +169,81 @@ class AuditMiddleware(BaseHTTPMiddleware):
                                 return user
                         finally:
                             db.close()
-            
-            # 如果无法从token获取用户信息，且是登录请求，尝试从请求体获取
-            if request.url.path.endswith("/login") and request.method.upper() == "POST":
-                return await self._get_user_from_login_request(request)
                 
         except Exception as e:
             pass
             
         return None
     
-    async def _get_user_from_login_request(self, request: Request) -> Optional[User]:
-        """从登录请求中获取用户信息"""
+
+
+    async def _get_username_from_request_body(self, request: Request) -> Optional[str]:
+        """安全地读取请求体并从中提取用户名（不消耗请求体）"""
         try:
-            # 对于登录请求，我们无法在中间件中安全地读取请求体
-            # 因为这会消耗请求体，导致后续的路由处理器无法读取
-            # 所以对于登录请求，我们返回None，让后续处理在响应后进行
+            # 读取原始body
+            body_bytes = await request.body()
+            if not body_bytes:
+                return None
+
+            # 解析JSON
+            try:
+                body_json = json.loads(body_bytes.decode("utf-8"))
+            except Exception:
+                body_json = None
+
+            # 重置request使下游还能读取body
+            async def receive() -> Dict[str, Any]:
+                return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+            # Starlette 使用 _receive 作为内部接收器
+            setattr(request, "_receive", receive)
+
+            if not isinstance(body_json, dict):
+                return None
+
+            # 支持 username 优先，其次 login 字段
+            username = body_json.get("username") or body_json.get("login")
+
+            if isinstance(username, str) and username.strip():
+                return username.strip()
             return None
-                
-        except Exception as e:
-            pass
-            
-        return None
-    
-    async def _get_user_from_login_response(self, response: Any) -> Optional[User]:
-        """从登录响应中获取用户信息"""
-        try:
-            print(f"Attempting to extract user from login response. Response type: {type(response)}")
-            
-            # 处理StreamingResponse (检查是否有body_iterator属性)
-            if hasattr(response, 'body_iterator'):
-                print("Found StreamingResponse with body_iterator")
-                # 收集所有响应块
-                body_parts = []
-                async for chunk in response.body_iterator:
-                    body_parts.append(chunk)
-                
-                # 合并所有块
-                if body_parts:
-                    body = b''.join(body_parts)
-                    body_str = body.decode('utf-8')
-                    print(f"StreamingResponse body content: {body_str[:200]}...")
-                    
-                    # 解析JSON响应
-                    response_data = json.loads(body_str)
-                    user_info = response_data.get('user')
-                    print(f"User info from response: {user_info}")
-                    
-                    if user_info and user_info.get('id'):
-                        # 从数据库获取完整的用户信息
-                        db = SessionLocal()
-                        try:
-                            user = db.query(User).filter(User.id == user_info['id']).first()
-                            print(f"Found user in database: {user}")
-                            return user
-                        finally:
-                            db.close()
-                            
-            # 处理普通Response
-            elif hasattr(response, 'body'):
-                print("Found regular Response with body")
-                body = response.body
-                print(f"Response body type: {type(body)}, length: {len(body) if body else 0}")
-                if body:
-                    # 将body转换为字符串
-                    if isinstance(body, (bytes, bytearray)):
-                        body_str = body.decode('utf-8')
-                    else:
-                        # 处理memoryview等其他类型
-                        body_str = bytes(body).decode('utf-8')
-                    
-                    print(f"Response body content: {body_str[:200]}...")  # 只打印前200个字符
-                    
-                    # 解析JSON响应
-                    response_data = json.loads(body_str)
-                    user_info = response_data.get('user')
-                    print(f"User info from response: {user_info}")
-                    
-                    if user_info and user_info.get('id'):
-                        # 从数据库获取完整的用户信息
-                        db = SessionLocal()
-                        try:
-                            user = db.query(User).filter(User.id == user_info['id']).first()
-                            print(f"Found user in database: {user}")
-                            return user
-                        finally:
-                            db.close()
-            else:
-                print("Response has no body or body_iterator attribute")
-                
-        except Exception as e:
-            print(f"Error extracting user from login response: {e}")
-            
+        except Exception:
+            return None
+
+    def _extract_token(self, request: Request) -> Optional[str]:
+        """从请求中尽可能提取访问令牌"""
+        # 1) Authorization 头
+        auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                return parts[1].strip()
+            # 如果没有Bearer前缀，尝试当作原始token使用
+            if len(parts) == 1 and parts[0]:
+                return parts[0].strip()
+
+        # 2) 自定义头
+        x_token = request.headers.get("X-Access-Token") or request.headers.get("x-access-token")
+        if x_token and x_token.strip():
+            return x_token.strip()
+
+        # 3) 查询参数
+        token_q = request.query_params.get("access_token") or request.query_params.get("token")
+        if token_q and token_q.strip():
+            return token_q.strip()
+
+        # 4) Cookies
+        cookie_auth = request.cookies.get("Authorization") or request.cookies.get("authorization")
+        if cookie_auth:
+            parts = cookie_auth.split()
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                return parts[1].strip()
+            if len(parts) == 1 and parts[0]:
+                return parts[0].strip()
+        cookie_token = request.cookies.get("access_token") or request.cookies.get("token")
+        if cookie_token and cookie_token.strip():
+            return cookie_token.strip()
+
         return None
     
     def _extract_action(self, request: Request) -> str:
@@ -263,7 +265,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
             return "update"
         elif method == "delete":
             return "delete"
-        elif method == "get":
+        elif method == "get" or method == "head" or method == "options" :
             return "view"
         else:
             return "unknown"
@@ -308,7 +310,6 @@ class AuditMiddleware(BaseHTTPMiddleware):
         response: Optional[Response]
     ):
         """记录请求日志"""
-        print(f"_log_request called: action={action}, user={user}")
         try:
             db = SessionLocal()
             try:
@@ -330,6 +331,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 if response and response.status_code != 200:
                     details["response_status"] = response.status_code
                 
+                # 确保日志中有明确的用户名
+
+
+
                 print(f"Calling AuditService.log_from_request with user={user}")
                 AuditService.log_from_request(
                     db=db,
@@ -342,7 +347,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     details=details,
                     status=status,
                     error_message=error_message,
-                    start_time=start_time
+                    start_time=start_time,
                 )
                 print(f"AuditService.log_from_request completed successfully")
             finally:

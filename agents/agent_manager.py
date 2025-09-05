@@ -3,7 +3,6 @@
 """
 from typing import List, Dict, Any, Optional
 
-from langgraph.checkpoint.postgres import PostgresSaver
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from fastapi import HTTPException, status
@@ -11,7 +10,7 @@ from fastapi import HTTPException, status
 from models.agent import Agent, AgentConfig
 from .agent_factory import AgentFactory
 from .default_agents import DefaultAgents
-from utils.logger import get_logger
+from services.logger import get_logger
 
 # 获取agent logger
 agent_logger = get_logger("agent")

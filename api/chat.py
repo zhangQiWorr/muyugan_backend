@@ -10,20 +10,18 @@ import asyncio
 from typing import Dict, List, Any
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from langgraph.checkpoint.postgres import PostgresSaver
-from langchain_core.messages.ai import  AIMessageChunk, AIMessage
-from langchain_core.messages.tool import ToolMessage, tool_call
-
-from langchain_core.messages.human import  HumanMessage, HumanMessageChunk
+from langchain_core.messages.ai import  AIMessageChunk
+from langchain_core.messages.tool import ToolMessage
 
 from models import get_db
 from models.user import User
 from models.conversation import Conversation, Message
-from models.schemas import ChatRequest, StreamChatRequest
+from models.schemas import StreamChatRequest
 from api.auth import get_current_user
-from utils.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger("chat_api")
 chat_logger = get_logger("chat")
@@ -134,8 +132,7 @@ def convert_local_image_to_base64(image_path: str) -> str:
     """
     import base64
     from PIL import Image
-    import io
-    
+
     # 如果是相对路径，转换为绝对路径
     if image_path.startswith('/static/'):
         # 从/static/路径转换为实际文件路径

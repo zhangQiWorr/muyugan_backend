@@ -129,6 +129,7 @@ class CourseLesson(Base):
     # 关系
     course = relationship("Course", back_populates="lessons")
     progress_records = relationship("LearningProgress", back_populates="lesson", cascade="all, delete-orphan")
+    media_files = relationship("Media", back_populates="lesson", cascade="all, delete-orphan")
 
 
 class CourseEnrollment(Base):

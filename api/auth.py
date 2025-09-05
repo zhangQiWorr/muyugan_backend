@@ -3,7 +3,6 @@
 包含注册、登录、密码重置等功能
 """
 
-import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -16,7 +15,7 @@ from models.schemas import (
     UserCreate, UserLogin, PhoneLogin, SendSmsCode, 
     UserUpdate, SuccessResponse
 )
-from utils.logger import get_logger
+from services.logger import get_logger
 from utils.file_upload import save_avatar_file, delete_avatar_files, get_default_avatar_url
 
 logger = get_logger("auth_api")

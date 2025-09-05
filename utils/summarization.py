@@ -3,8 +3,8 @@
 使用langmem的SummarizationNode处理超出上下文窗口的对话
 """
 import os
-from typing import Optional, Dict, Any
-from utils.logger import get_logger
+from typing import Dict, Any
+from services.logger import get_logger
 
 logger = get_logger("summarization")
 

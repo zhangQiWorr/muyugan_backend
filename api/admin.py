@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from models.user import User
 from models.schemas import LogLevelRequest
 from api.auth import get_current_user
-from utils.logger import get_logger, EnhancedLogger
+from services.logger import get_logger, EnhancedLogger
 
 logger = get_logger("admin_api")
 router = APIRouter(prefix="/admin", tags=["管理员"])

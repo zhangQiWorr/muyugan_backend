@@ -2,7 +2,7 @@
 智能体工厂 - 动态创建和配置智能体
 """
 import os
-from typing import Dict, List, Any, Optional, Type
+from typing import Dict, List, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
@@ -10,8 +10,8 @@ from langgraph.prebuilt import create_react_agent
 from langchain_tavily import TavilySearch
 
 from models.agent import Agent
-from utils.logger import get_logger
-from utils.summarization import create_summarization_hook, SummarizationNode
+from services.logger import get_logger
+from utils.summarization import create_summarization_hook
 
 # 获取factory logger
 factory_logger = get_logger("factory")
