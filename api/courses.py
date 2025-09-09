@@ -610,7 +610,7 @@ async def get_courses(
             course.category = db.query(CourseCategory).filter(
                 CourseCategory.id == course.category_id
             ).first()
-    
+
     return CourseListResponse(
         courses=[CourseResponse.from_orm(course) for course in courses],
         total=total,
@@ -836,6 +836,25 @@ async def create_lesson(
     lesson_dict = lesson_data.dict(exclude={'media_ids'})
     lesson_dict['duration'] = lesson_dict['duration'] * 60
     
+    # 验证媒体文件
+    if media_ids:
+        from models.media import Media
+        for media_id in media_ids:
+            # 检查媒体文件是否存在
+            media = db.query(Media).filter(Media.id == media_id).first()
+            if not media:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"媒体文件不存在: {media_id}"
+                )
+            
+            # 检查媒体文件是否已经被其他课时关联
+            if media.lesson_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
+                )
+    
     lesson = CourseLesson(**lesson_dict, course_id=course_id)
     db.add(lesson)
     db.commit()
@@ -931,6 +950,12 @@ async def delete_lesson(
         )
     
     course_id = lesson.course_id
+    
+    # 取消媒体文件关联
+    media_files = lesson.media_files
+    for media in media_files:
+        media.lesson_id = None
+    
     db.delete(lesson)
     db.commit()
     

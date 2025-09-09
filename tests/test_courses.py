@@ -260,8 +260,6 @@ def test_create_course_lesson(client: TestClient, test_user_data: dict, test_cou
     lesson_data = {
         "title": "第一课时",
         "description": "课时描述",
-        "content_type": "video",
-        "content_url": "https://example.com/video.mp4",
         "duration": 1800,
         "sort_order": 1,
         "is_free": False

@@ -110,10 +110,8 @@ class CourseLesson(Base):
     course_id = Column(String, ForeignKey("courses.id"), nullable=False)
     title = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
-    content_type = Column(Enum(ContentType), nullable=False)
     
     # 内容相关
-    content_url = Column(String(500), nullable=True)  # 内容链接
     content_text = Column(Text, nullable=True)  # 文本内容
     duration = Column(Integer, default=0)  # 时长（分钟）
     

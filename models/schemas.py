@@ -122,8 +122,8 @@ class StreamChatRequest(BaseModel):
 class CourseLessonBase(BaseSchema):
     title: str = Field(..., max_length=200)
     description: Optional[str] = None
-    content_type: str = Field(..., description="video, audio, text, pdf, quiz")
-    content_url: Optional[str] = Field(None, max_length=500)
+
+
     content_text: Optional[str] = None
     duration: int = Field(0, ge=0)
     sort_order: int = 0
@@ -141,8 +141,8 @@ class CourseLessonCreate(CourseLessonBase):
 class CourseLessonUpdate(BaseSchema):
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
-    content_type: Optional[str] = None
-    content_url: Optional[str] = Field(None, max_length=500)
+
+
     content_text: Optional[str] = None
     duration: Optional[int] = Field(None, ge=0)
     sort_order: Optional[int] = None
@@ -617,6 +617,8 @@ class MediaInfoResponse(BaseModel):
     uploader_id: str
     upload_time: Optional[datetime] = None
     lesson_id: Optional[str] = None  # 关联的课时ID
+    upload_status: Optional[str] = None
+    storage_type: Optional[str] = None
     
     class Config:
         from_attributes = True

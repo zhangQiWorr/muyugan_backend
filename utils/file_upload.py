@@ -14,8 +14,8 @@ from services.logger import get_logger
 logger = get_logger("file_upload")
 
 # 配置
-UPLOAD_DIR = "static/images/src_avatars"
-AVATAR_DIR = "static/images/avatars"
+UPLOAD_DIR = "/static/images/src_avatars"
+AVATAR_DIR = "/static/images/avatars"
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
 AVATAR_SIZES = {
@@ -100,7 +100,7 @@ def process_avatar_image(image_data: bytes, filename: str) -> dict:
             file_path = os.path.join(AVATAR_DIR, size_filename)
             canvas.save(file_path, 'JPEG', quality=85, optimize=True)
             
-            avatar_paths[size_name] = f"/static/avatars/{size_filename}"
+            avatar_paths[size_name] = file_path
         
         logger.info(f"✅ 头像处理完成: {filename}")
         return avatar_paths

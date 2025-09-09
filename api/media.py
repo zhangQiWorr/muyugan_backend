@@ -6,13 +6,14 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc, or_
 
 from models import get_db
 from models.media import Media
 # UserMediaAccess已合并到MediaPlayRecord中
 from models.media_play_record import MediaPlayRecord
+from models.course import CourseLesson, Course
 from services.media_play_service import MediaPlayService
 from models.schemas import (
     MediaInfoResponse, 
@@ -61,9 +62,6 @@ AUDIO_DIR = os.path.join(STATIC_DIR, "audios")
 IMAGE_DIR = os.path.join(STATIC_DIR, "images")
 DOCUMENT_DIR = os.path.join(STATIC_DIR, "documents")
 
-# 确保目录存在
-for directory in [STATIC_DIR, VIDEO_DIR, AUDIO_DIR, IMAGE_DIR, DOCUMENT_DIR]:
-    os.makedirs(directory, exist_ok=True)
 
 # 支持的MIME类型
 VIDEO_TYPES = {
@@ -230,6 +228,7 @@ async def get_media_list(
     file_types: Optional[str] = None,
     course_id: Optional[str] = None,
     lesson_id: Optional[str] = None,
+    exclude_associated: Optional[bool] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -243,8 +242,12 @@ async def get_media_list(
         file_types: 文件类型过滤，多个类型用逗号分隔 (如: "video,audio")
         course_id: 课程ID过滤
         lesson_id: 课时ID过滤
+        exclude_associated: 是否排除已关联的媒体文件 (true/false)
     """
-    query = db.query(Media)
+    # 使用joinedload预加载关联的课时和课程信息
+    query = db.query(Media).options(
+        joinedload(Media.lesson).joinedload(CourseLesson.course)
+    )
     
     # 搜索功能：支持文件名模糊搜索
     if search:
@@ -270,17 +273,66 @@ async def get_media_list(
     
     if course_id:
         # Filter by course_id through lesson relationship
-        pass  # TODO: Implement course filtering when CourseLesson model is available
+        # 使用子查询来避免影响joinedload
+        from sqlalchemy import select
+        subquery = select(CourseLesson.id).where(CourseLesson.course_id == course_id)
+        query = query.filter(Media.lesson_id.in_(subquery))
     
     if lesson_id:
         query = query.filter(Media.lesson_id == lesson_id)
+    
+    # 过滤已关联的媒体文件
+    if exclude_associated is not None:
+        if exclude_associated:
+            # 排除已关联的媒体文件（lesson_id不为空）
+            query = query.filter(Media.lesson_id.is_(None))
+        else:
+            # 只显示已关联的媒体文件（lesson_id不为空）
+            query = query.filter(Media.lesson_id.isnot(None))
     
     total = query.count()
     
     media_list = query.order_by(desc(Media.upload_time)).offset((page - 1) * size).limit(size).all()
     
+    # 构建包含课时和课程信息的响应数据
+    items = []
+    for media in media_list:
+        media_dict = {
+            "id": media.id,
+            "description": media.description,
+            "filename": media.filename,
+            "filepath": media.filepath,
+            "media_type": media.media_type,
+            "cover_url": media.cover_url,
+            "duration": media.duration,
+            "size": media.size,
+            "mime_type": media.mime_type,
+            "uploader_id": media.uploader_id,
+            "upload_time": media.upload_time,
+            "lesson_id": media.lesson_id,
+            "lesson": None,
+            "course": None
+        }
+
+        # 添加课时信息
+        if media.lesson:
+            media_dict["lesson"] = {
+                "id": media.lesson.id,
+                "title": media.lesson.title
+            }
+
+
+            # 添加课程信息
+            if media.lesson.course:
+                media_dict["course"] = {
+                    "id": media.lesson.course.id,
+                    "title": media.lesson.course.title
+                }
+        
+        items.append(media_dict)
+    
     return {
-        "items": [MediaInfoResponse.from_orm(media) for media in media_list],
+        "items": items,
         "total": total,
         "page": page,
         "size": size,
@@ -614,6 +666,90 @@ async def generate_presign_url(
 
 
 
+
+
+@router.get("/preview/{media_id}", summary="预览媒体文件")
+async def preview_media(
+    media_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    预览媒体文件
+    
+    Args:
+        media_id: 媒体文件ID
+        
+    Returns:
+        媒体文件预览信息，包括预览URL和类型
+    """
+    # 获取媒体文件信息
+    media = db.query(Media).filter(Media.id == media_id).first()
+    if not media:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    try:
+        # 检查文件是否存在
+        if not media.filepath or not os.path.exists(media.filepath):
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
+        
+        # 根据媒体类型生成预览信息
+        preview_info = {
+            "media_id": media.id,
+            "filename": media.filename,
+            "media_type": media.media_type,
+            "file_size": media.size,
+            "duration": media.duration,
+            "mime_type": media.mime_type,
+            "preview_url": None,
+            "preview_type": None
+        }
+        
+        # 构建预览URL
+        if media.storage_type == "oss" and media.oss_key:
+            # OSS文件
+            if PRESIGN_URL_AVAILABLE and generate_download_url:
+                bucket_name = os.getenv('OSS_BUCKET_NAME', 'zhangqi-video11')
+                region = os.getenv('OSS_REGION', 'cn-guangzhou')
+                
+                result = generate_download_url(
+                    bucket=bucket_name,
+                    key=str(media.oss_key),
+                    expires_in_hours=1,
+                    region=region
+                )
+                preview_info["preview_url"] = result['url']
+            else:
+                raise HTTPException(status_code=500, detail="OSS预览功能不可用")
+        else:
+            # 本地文件
+            preview_info["preview_url"] = f"http://10.98.24.251:8000{media.filepath}"
+        
+        # 根据媒体类型设置预览类型
+        if media.media_type == "image":
+            preview_info["preview_type"] = "image"
+        elif media.media_type == "video":
+            preview_info["preview_type"] = "video"
+        elif media.media_type == "audio":
+            preview_info["preview_type"] = "audio"
+        elif media.media_type == "document":
+            preview_info["preview_type"] = "document"
+        else:
+            preview_info["preview_type"] = "unknown"
+        
+        logger.info(f"✅ 成功生成媒体文件预览: {media.filename} ({media.media_type})")
+        
+        return {
+            "success": True,
+            "message": "媒体文件预览信息获取成功",
+            "data": preview_info
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取媒体文件预览失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取媒体文件预览失败: {str(e)}")
 
 
 @router.post("/report", summary="上报视频播放事件")
