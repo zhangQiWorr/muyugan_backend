@@ -36,7 +36,6 @@ from api.learning import router as learning_router
 from api.membership import router as membership_router
 from api.superadmin import router as superadmin_router
 from api.lesson_materials import router as lesson_router
-from api.homepage import router as homepage_router
 
 # 获取主应用logger
 logger = get_logger("main")
@@ -288,7 +287,6 @@ app.include_router(learning_router)
 app.include_router(membership_router)
 app.include_router(superadmin_router)
 app.include_router(lesson_router, prefix="/api")
-app.include_router(homepage_router, prefix="/api")
 
 # 健康检查
 @app.get("/health")
