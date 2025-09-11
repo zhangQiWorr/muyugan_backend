@@ -118,23 +118,62 @@ class MediaPlayService:
                                  playback_rate: float = 1.0):
         """
         更新有效观看时长
+        
+        逻辑说明：
+        1. 只有在连续播放的情况下才计入有效时长
+        2. 支持的事件类型：pause（暂停）、ended（结束）、heartbeat（心跳）
+        3. 必须提供previous_time来计算时间差
+        4. 时间差必须在合理范围内（0.1-120秒）
+        5. 考虑播放速度对有效时长的影响
         """
-        if event_type in ["pause", "ended", "heartbeat"] and previous_time is not None:
-            time_diff = current_time - previous_time
+        # 获取当前有效时长和总播放时长
+        current_effective = getattr(play_record, 'effective_duration', 0) or 0.0
+        current_total = getattr(play_record, 'total_play_time', 0) or 0.0
+        
+        # 处理播放开始事件
+        if event_type == "play":
+            # 播放开始事件，记录当前时间但不计入有效时长
+            logger.debug(f"播放开始事件: {current_time:.2f}s")
+            return
+        
+        # 计算有效观看时长的事件类型
+        if event_type in ["pause", "ended", "heartbeat"]:
+            # 尝试获取上一个播放时间点
+            if previous_time is not None:
+                time_diff = current_time - previous_time
+            else:
+                # 如果没有previous_time，尝试从最近的事件中获取
+                last_event = self.db.query(MediaPlayEvent).filter(
+                    MediaPlayEvent.record_id == getattr(play_record, 'id'),
+                    MediaPlayEvent.event_type.in_([EventType.PLAY, EventType.HEARTBEAT])
+                ).order_by(MediaPlayEvent.timestamp.desc()).first()
+                
+                if last_event and last_event.current_time is not None:
+                    time_diff = current_time - last_event.current_time
+                else:
+                    logger.warning(f"无法计算有效观看时长：缺少previous_time和最近播放事件")
+                    return
             
-            # 验证时间差的合理性（0-60秒之间）
-            if 0 < time_diff <= 60:
+            # 验证时间差的合理性（0.1-120秒之间，扩大范围以适应不同的心跳间隔）
+            if 0.1 <= time_diff <= 120:
                 # 计算有效观看时长（考虑播放速度）
-                effective_time = time_diff / playback_rate
+                # 如果播放速度大于1，实际观看时长应该除以播放速度
+                effective_time = time_diff / max(playback_rate, 0.25)  # 防止除零和异常值
                 
                 # 更新统计数据
-                current_effective = getattr(play_record, 'effective_duration', 0)
-                current_total = getattr(play_record, 'total_play_time', 0)
+                new_effective = current_effective + effective_time
+                new_total = current_total + time_diff
                 
-                setattr(play_record, 'effective_duration', current_effective + effective_time)
-                setattr(play_record, 'total_play_time', current_total + time_diff)
+                setattr(play_record, 'effective_duration', new_effective)
+                setattr(play_record, 'total_play_time', new_total)
                 
-                logger.debug(f"更新有效观看时长: +{effective_time:.2f}s (总计: {current_effective + effective_time:.2f}s)")
+                logger.debug(f"更新有效观看时长: +{effective_time:.2f}s (时间差:{time_diff:.2f}s, 播放速度:{playback_rate}x, 总计: {new_effective:.2f}s)")
+            else:
+                logger.warning(f"时间差异常，跳过更新: {time_diff:.2f}s (事件类型: {event_type})")
+        
+        # 对于seek事件，不计入有效时长
+        elif event_type == "seek":
+            logger.debug(f"拖动事件，不计入有效时长: {current_time:.2f}s")
     
     def check_and_mark_completion(self, play_record: MediaPlayRecord, 
                                 video_duration: float, event_type: str,
@@ -164,17 +203,24 @@ class MediaPlayService:
         effective_rate = effective_duration / video_duration
         
         # 判断是否有效完成
+        # 根据拖动次数调整有效观看率要求
+        # 如果拖动次数较多，说明用户可能在寻找特定内容，适当降低有效观看率要求
+        adjusted_effective_rate = min_effective_rate
+        if seek_count > 10:  # 拖动次数过多
+            adjusted_effective_rate = min_effective_rate * 0.7  # 降低30%要求
+        elif seek_count > 5:  # 拖动次数较多
+            adjusted_effective_rate = min_effective_rate * 0.85  # 降低15%要求
+        
         is_effectively_completed = (
             completion_rate >= min_completion_rate and
-            effective_rate >= min_effective_rate and
-            seek_count < 10  # 拖动次数不能太多
+            effective_rate >= adjusted_effective_rate
         )
         
         if is_effectively_completed:
             setattr(play_record, 'completed', True)
             setattr(play_record, 'completed_at', datetime.now())
             
-            logger.info(f"标记观看完成 - 完成率: {completion_rate:.2%}, 有效率: {effective_rate:.2%}, 拖动次数: {seek_count}")
+            logger.info(f"标记观看完成 - 完成率: {completion_rate:.2%}, 有效率: {effective_rate:.2%} (要求: {adjusted_effective_rate:.2%}), 拖动次数: {seek_count}")
             return True
         
         return False

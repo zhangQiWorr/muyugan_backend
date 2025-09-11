@@ -24,7 +24,6 @@ from services.middleware import APILoggingMiddleware, RequestContextMiddleware
 from api import (
     auth_router,
     health_router,
-    video_router,
     images_router,
     media_router
 )
@@ -35,7 +34,6 @@ from api.orders import router as orders_router
 from api.learning import router as learning_router
 from api.membership import router as membership_router
 from api.superadmin import router as superadmin_router
-from api.lesson_materials import router as lesson_router
 
 # 获取主应用logger
 logger = get_logger("main")
@@ -276,7 +274,6 @@ app.add_middleware(AuditMiddleware)
 # 注册基础路由
 app.include_router(health_router)
 app.include_router(auth_router)
-app.include_router(video_router)
 app.include_router(images_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 
@@ -286,7 +283,6 @@ app.include_router(orders_router)
 app.include_router(learning_router)
 app.include_router(membership_router)
 app.include_router(superadmin_router)
-app.include_router(lesson_router, prefix="/api")
 
 # 健康检查
 @app.get("/health")

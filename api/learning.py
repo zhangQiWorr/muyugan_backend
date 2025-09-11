@@ -1,457 +1,300 @@
 """
-学习管理相关API
-包含课程报名、学习进度、评价、收藏等
+学习相关API接口
+处理用户学习记录、进度跟踪等功能
 """
-
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import List
+from pydantic import BaseModel
 from datetime import datetime
 
 from models import get_db
 from models.user import User
-from models.course import Course, CourseLesson, CourseEnrollment, LearningProgress, CourseReview, CourseFavorite
-from models.schemas import (
-    LearningProgressUpdate, LearningProgressResponse,
-    CourseEnrollmentResponse, CourseReviewCreate, CourseReviewResponse,
-    CourseFavoriteCreate, CourseFavoriteResponse,
-    SuccessResponse
-)
-from services.logger import get_logger
 from utils.auth_utils import get_current_user
+from services.learning_service import LearningService
+from services.logger import get_logger
 
 logger = get_logger("learning_api")
-router = APIRouter(prefix="/learning", tags=["学习管理"])
+router = APIRouter(prefix="/api/learning", tags=["学习管理"])
 
+# 数据模型
+class MediaProgressRequest(BaseModel):
+    """媒体观看进度请求"""
+    media_id: str
+    watch_duration: int  # 已观看时长（秒）
+    total_duration: int  # 总时长（秒）
 
-# 课程报名
-@router.post("/enroll/{course_id}", response_model=CourseEnrollmentResponse)
-async def enroll_course(
-    course_id: str,
+class LessonProgressRequest(BaseModel):
+    """课时学习进度请求"""
+    lesson_id: str
+    watch_duration: int  # 已观看时长（秒）
+    total_duration: int  # 总时长（秒）
+
+class LessonProgressResponse(BaseModel):
+    """课时学习进度响应"""
+    lesson_id: str
+    is_completed: bool
+    watch_duration: int
+    total_duration: int
+    progress_percentage: float
+    last_watched_at: datetime
+
+class RecentCourseResponse(BaseModel):
+    """最近学习课程响应"""
+    course_id: str
+    title: str
+    subtitle: Optional[str]
+    cover_image: Optional[str]
+    duration: int
+    lesson_count: int
+    difficulty_level: str
+    is_featured: bool
+    is_hot: bool
+    last_learned_at: str
+    course_progress: dict
+    last_lesson: dict
+
+class LearningStatsResponse(BaseModel):
+    """学习统计响应"""
+    total_learning_time: int  # 总学习时长（分钟）
+    completed_lessons: int    # 已完成课时数
+    learning_courses: int     # 正在学习的课程数
+    recent_learning_time: int # 最近7天学习时长（分钟）
+    learning_streak_days: int # 学习连续天数
+
+@router.post("/lesson/start")
+async def start_lesson(
+    lesson_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """报名课程"""
-    # 检查课程是否存在
-    course = db.query(Course).filter(
-        Course.id == course_id,
-        Course.status == "published"
-    ).first()
+    """开始学习课时
     
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在或未发布"
-        )
-    
-    # 检查是否已报名
-    existing_enrollment = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.course_id == course_id,
-        CourseEnrollment.is_active == True
-    ).first()
-    
-    if existing_enrollment:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="您已报名此课程"
-        )
-    
-    # 创建报名记录
-    enrollment = CourseEnrollment(
-        user_id=current_user.id,
-        course_id=course_id
-    )
-    db.add(enrollment)
-    
-    # 更新课程报名人数
-    course.enroll_count += 1
-    
-    db.commit()
-    db.refresh(enrollment)
-    
-    # 加载课程信息
-    enrollment.course = course
-    
-    return enrollment
+    记录用户开始学习某个课时
+    """
+    try:
+        learning_service = LearningService(db)
+        progress = learning_service.record_lesson_start(current_user.id, lesson_id)
+        
+        logger.info(f"用户 {current_user.username} 开始学习课时 {lesson_id}")
+        
+        return {
+            "message": "开始学习成功",
+            "lesson_id": lesson_id,
+            "started_at": progress.started_at.isoformat()
+        }
+    except Exception as e:
+        logger.error(f"开始学习失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="开始学习失败")
 
-
-@router.get("/enrollments", response_model=List[CourseEnrollmentResponse])
-async def get_my_enrollments(
+@router.post("/media/progress")
+async def update_media_progress(
+    progress_data: MediaProgressRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取我的报名课程"""
-    enrollments = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.is_active == True
-    ).order_by(CourseEnrollment.enrolled_at.desc()).all()
+    """更新媒体观看进度
     
-    # 加载课程信息
-    for enrollment in enrollments:
-        enrollment.course = db.query(Course).filter(Course.id == enrollment.course_id).first()
-    
-    return enrollments
+    记录用户观看媒体文件的进度，并自动更新相关课时的学习进度
+    """
+    try:
+        learning_service = LearningService(db)
+        
+        # 记录媒体观看进度
+        play_record = learning_service.record_media_progress(
+            current_user.id,
+            progress_data.media_id,
+            progress_data.watch_duration,
+            progress_data.total_duration
+        )
+        
+        # 获取媒体文件信息，找到关联的课时
+        from models.media import Media
+        media = db.query(Media).filter(Media.id == progress_data.media_id).first()
+        
+        if media and media.lesson_id:
+            # 更新课时学习进度
+            lesson_progress = learning_service.update_lesson_progress(
+                current_user.id,
+                media.lesson_id
+            )
+            
+            # 计算课时进度详情
+            lesson_progress_detail = learning_service.calculate_lesson_progress(
+                current_user.id,
+                media.lesson_id
+            )
+            
+            return {
+                "message": "媒体观看进度更新成功",
+                "media_id": progress_data.media_id,
+                "media_progress": {
+                    "progress_percentage": round(play_record.progress * 100, 1),
+                    "watch_duration": play_record.effective_duration,
+                    "total_duration": progress_data.total_duration,
+                    "is_completed": play_record.completed
+                },
+                "lesson_progress": {
+                    "lesson_id": media.lesson_id,
+                    "progress_percentage": lesson_progress_detail['progress_percentage'],
+                    "completed_media": lesson_progress_detail['completed_media'],
+                    "total_media": lesson_progress_detail['total_media'],
+                    "is_completed": lesson_progress.is_completed
+                }
+            }
+        else:
+            return {
+                "message": "媒体观看进度更新成功",
+                "media_id": progress_data.media_id,
+                "media_progress": {
+                    "progress_percentage": round(play_record.progress * 100, 1),
+                    "watch_duration": play_record.effective_duration,
+                    "total_duration": progress_data.total_duration,
+                    "is_completed": play_record.completed
+                }
+            }
+    except Exception as e:
+        logger.error(f"更新媒体观看进度失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新媒体观看进度失败")
 
-
-# 学习进度
-@router.post("/progress", response_model=LearningProgressResponse)
-async def update_learning_progress(
-    progress_data: LearningProgressUpdate,
+@router.post("/lesson/progress", response_model=LessonProgressResponse)
+async def update_lesson_progress(
+    progress_data: LessonProgressRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """更新学习进度"""
-    # 检查是否已报名课程
-    enrollment = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.course_id == progress_data.course_id,
-        CourseEnrollment.is_active == True
-    ).first()
+    """更新课时学习进度
     
-    if not enrollment:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请先报名课程"
+    记录用户的学习进度，包括观看时长等
+    """
+    try:
+        learning_service = LearningService(db)
+        
+        # 更新课时进度（基于媒体文件观看进度）
+        progress = learning_service.update_lesson_progress(
+            current_user.id,
+            progress_data.lesson_id
         )
-    
-    # 检查课时是否存在
-    lesson = db.query(CourseLesson).filter(
-        CourseLesson.id == progress_data.lesson_id,
-        CourseLesson.course_id == progress_data.course_id
-    ).first()
-    
-    if not lesson:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课时不存在"
+        
+        # 计算课时进度详情
+        lesson_progress_detail = learning_service.calculate_lesson_progress(
+            current_user.id,
+            progress_data.lesson_id
         )
-    
-    # 查找或创建学习进度记录
-    progress = db.query(LearningProgress).filter(
-        LearningProgress.user_id == current_user.id,
-        LearningProgress.course_id == progress_data.course_id,
-        LearningProgress.lesson_id == progress_data.lesson_id,
-        LearningProgress.enrollment_id == enrollment.id
-    ).first()
-    
-    if not progress:
-        progress = LearningProgress(
-            user_id=current_user.id,
-            course_id=progress_data.course_id,
-            lesson_id=progress_data.lesson_id,
-            enrollment_id=enrollment.id,
-            total_duration=lesson.duration * 60  # 转换为秒
+        
+        return LessonProgressResponse(
+            lesson_id=progress.lesson_id,
+            is_completed=progress.is_completed,
+            watch_duration=progress.watch_duration,
+            total_duration=progress.total_duration,
+            progress_percentage=lesson_progress_detail['progress_percentage'],
+            last_watched_at=progress.last_watched_at
         )
-        db.add(progress)
-    
-    # 更新进度信息
-    progress.watch_duration = progress_data.watch_duration
-    progress.is_completed = progress_data.is_completed
-    progress.last_watched_at = datetime.utcnow()
-    
-    if progress_data.is_completed and not progress.completed_at:
-        progress.completed_at = datetime.utcnow()
-    
-    db.commit()
-    db.refresh(progress)
-    
-    return progress
+    except Exception as e:
+        logger.error(f"更新学习进度失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新学习进度失败")
 
-
-@router.get("/progress/{course_id}", response_model=List[LearningProgressResponse])
-async def get_course_progress(
-    course_id: str,
+@router.get("/courses/recent", response_model=List[RecentCourseResponse])
+async def get_recent_courses(
+    limit: int = Query(10, ge=1, le=50, description="返回数量限制"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取课程学习进度"""
-    # 检查是否已报名课程
-    enrollment = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.course_id == course_id,
-        CourseEnrollment.is_active == True
-    ).first()
+    """获取用户最近学习的课程列表
     
-    if not enrollment:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请先报名课程"
-        )
-    
-    progress_records = db.query(LearningProgress).filter(
-        LearningProgress.user_id == current_user.id,
-        LearningProgress.course_id == course_id,
-        LearningProgress.enrollment_id == enrollment.id
-    ).all()
-    
-    return progress_records
+    返回用户最近学习的课程，按最后学习时间排序
+    """
+    try:
+        learning_service = LearningService(db)
+        recent_courses = learning_service.get_user_recent_courses(current_user.id, limit)
+        
+        return [RecentCourseResponse(**course) for course in recent_courses]
+    except Exception as e:
+        logger.error(f"获取最近学习课程失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取最近学习课程失败")
 
-
-# 课程评价
-@router.post("/reviews", response_model=CourseReviewResponse)
-async def create_course_review(
-    review_data: CourseReviewCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """创建课程评价"""
-    # 检查课程是否存在
-    course = db.query(Course).filter(Course.id == review_data.course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
-        )
-    
-    # 检查是否已评价
-    existing_review = db.query(CourseReview).filter(
-        CourseReview.user_id == current_user.id,
-        CourseReview.course_id == review_data.course_id
-    ).first()
-    
-    if existing_review:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="您已评价过此课程"
-        )
-    
-    # 检查是否已报名课程
-    enrollment = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.course_id == review_data.course_id,
-        CourseEnrollment.is_active == True
-    ).first()
-    
-    if not enrollment:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请先报名课程"
-        )
-    
-    # 创建评价
-    review = CourseReview(
-        user_id=current_user.id,
-        course_id=review_data.course_id,
-        rating=review_data.rating,
-        title=review_data.title,
-        content=review_data.content,
-        is_verified=True  # 已报名用户评价自动验证
-    )
-    db.add(review)
-    
-    # 更新课程评分
-    course.rating_count += 1
-    # 重新计算平均评分
-    total_rating = db.query(func.sum(CourseReview.rating)).filter(
-        CourseReview.course_id == review_data.course_id,
-        CourseReview.is_verified == True
-    ).scalar()
-    course.rating = total_rating / course.rating_count if course.rating_count > 0 else 0
-    
-    db.commit()
-    db.refresh(review)
-    
-    # 加载用户信息
-    review.user = current_user
-    
-    return review
-
-
-@router.get("/reviews/{course_id}", response_model=List[CourseReviewResponse])
-async def get_course_reviews(
-    course_id: str,
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db)
-):
-    """获取课程评价列表"""
-    query = db.query(CourseReview).filter(
-        CourseReview.course_id == course_id,
-        CourseReview.is_public == True
-    )
-    
-    total = query.count()
-    reviews = query.order_by(CourseReview.created_at.desc()).offset((page - 1) * size).limit(size).all()
-    
-    # 加载用户信息
-    for review in reviews:
-        review.user = db.query(User).filter(User.id == review.user_id).first()
-    
-    return reviews
-
-
-# 课程收藏
-@router.post("/favorites", response_model=CourseFavoriteResponse)
-async def add_course_favorite(
-    favorite_data: CourseFavoriteCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """收藏课程"""
-    # 检查课程是否存在
-    course = db.query(Course).filter(Course.id == favorite_data.course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
-        )
-    
-    # 检查是否已收藏
-    existing_favorite = db.query(CourseFavorite).filter(
-        CourseFavorite.user_id == current_user.id,
-        CourseFavorite.course_id == favorite_data.course_id
-    ).first()
-    
-    if existing_favorite:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="您已收藏此课程"
-        )
-    
-    # 创建收藏记录
-    favorite = CourseFavorite(
-        user_id=current_user.id,
-        course_id=favorite_data.course_id
-    )
-    db.add(favorite)
-    db.commit()
-    db.refresh(favorite)
-    
-    # 加载课程信息
-    favorite.course = course
-    
-    return favorite
-
-
-@router.get("/favorites", response_model=List[CourseFavoriteResponse])
-async def get_my_favorites(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """获取我的收藏"""
-    favorites = db.query(CourseFavorite).filter(
-        CourseFavorite.user_id == current_user.id
-    ).order_by(CourseFavorite.created_at.desc()).all()
-    
-    # 加载课程信息
-    for favorite in favorites:
-        favorite.course = db.query(Course).filter(Course.id == favorite.course_id).first()
-    
-    return favorites
-
-
-@router.delete("/favorites/{course_id}", response_model=SuccessResponse)
-async def remove_course_favorite(
-    course_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """取消收藏"""
-    favorite = db.query(CourseFavorite).filter(
-        CourseFavorite.user_id == current_user.id,
-        CourseFavorite.course_id == course_id
-    ).first()
-    
-    if not favorite:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="收藏记录不存在"
-        )
-    
-    db.delete(favorite)
-    db.commit()
-    
-    return SuccessResponse(message="取消收藏成功")
-
-
-# 学习统计
-@router.get("/statistics")
+@router.get("/statistics", response_model=LearningStatsResponse)
 async def get_learning_statistics(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取学习统计"""
-    # 报名课程数
-    enrollment_count = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.is_active == True
-    ).count()
+    """获取用户学习统计信息
     
-    # 完成课程数
-    completed_courses = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.is_active == True,
-        CourseEnrollment.completed_at.isnot(None)
-    ).count()
-    
-    # 总学习时长（分钟）
-    total_duration = db.query(func.sum(LearningProgress.watch_duration)).filter(
-        LearningProgress.user_id == current_user.id
-    ).scalar() or 0
-    total_duration = total_duration // 60  # 转换为分钟
-    
-    # 今日学习时长（分钟）
-    today = datetime.utcnow().date()
-    today_duration = db.query(func.sum(LearningProgress.watch_duration)).filter(
-        LearningProgress.user_id == current_user.id,
-        func.date(LearningProgress.last_watched_at) == today
-    ).scalar() or 0
-    today_duration = today_duration // 60  # 转换为分钟
-    
-    # 收藏课程数
-    favorite_count = db.query(CourseFavorite).filter(
-        CourseFavorite.user_id == current_user.id
-    ).count()
-    
-    return {
-        "enrollment_count": enrollment_count,
-        "completed_courses": completed_courses,
-        "total_duration": total_duration,
-        "today_duration": today_duration,
-        "favorite_count": favorite_count
-    }
+    返回用户的学习统计数据，包括总学习时长、完成课时数等
+    """
+    try:
+        learning_service = LearningService(db)
+        stats = learning_service.get_user_learning_statistics(current_user.id)
+        
+        return LearningStatsResponse(**stats)
+    except Exception as e:
+        logger.error(f"获取学习统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取学习统计失败")
 
-
-# 学习证书
-@router.get("/certificate/{course_id}")
-async def get_course_certificate(
-    course_id: str,
+@router.get("/courses/continue")
+async def get_continue_learning_courses(
+    limit: int = Query(5, ge=1, le=20, description="返回数量限制"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取课程完成证书"""
-    # 检查是否已报名并完成课程
-    enrollment = db.query(CourseEnrollment).filter(
-        CourseEnrollment.user_id == current_user.id,
-        CourseEnrollment.course_id == course_id,
-        CourseEnrollment.is_active == True
-    ).first()
+    """获取继续学习的课程列表
     
-    if not enrollment:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请先报名课程"
-        )
+    返回用户未完成但已开始学习的课程
+    """
+    try:
+        learning_service = LearningService(db)
+        recent_courses = learning_service.get_user_recent_courses(current_user.id, limit * 2)
+        
+        # 过滤出未完成的课程（进度 < 100%）
+        continue_courses = []
+        for course in recent_courses:
+            if course['course_progress']['progress_percentage'] < 100.0:
+                continue_courses.append(course)
+                if len(continue_courses) >= limit:
+                    break
+        
+        return {
+            "courses": continue_courses,
+            "total": len(continue_courses)
+        }
+    except Exception as e:
+        logger.error(f"获取继续学习课程失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取继续学习课程失败")
+
+@router.get("/courses/completed")
+async def get_completed_courses(
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(10, ge=1, le=50, description="每页数量"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取已完成的课程列表
     
-    if not enrollment.completed_at:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="课程尚未完成"
-        )
-    
-    # 获取课程信息
-    course = db.query(Course).filter(Course.id == course_id).first()
-    
-    # 生成证书信息
-    certificate = {
-        "certificate_id": f"CERT-{course_id}-{current_user.id}",
-        "student_name": current_user.full_name or current_user.username,
-        "course_name": course.title,
-        "completion_date": enrollment.completed_at.isoformat(),
-        "progress_percentage": enrollment.progress_percentage,
-        "issued_date": datetime.utcnow().isoformat()
-    }
-    
-    return certificate
+    返回用户已完成学习的课程
+    """
+    try:
+        learning_service = LearningService(db)
+        recent_courses = learning_service.get_user_recent_courses(current_user.id, 100)  # 获取更多数据用于过滤
+        
+        # 过滤出已完成的课程（进度 = 100%）
+        completed_courses = [
+            course for course in recent_courses 
+            if course['course_progress']['progress_percentage'] >= 100.0
+        ]
+        
+        # 分页
+        total = len(completed_courses)
+        start = (page - 1) * size
+        end = start + size
+        paginated_courses = completed_courses[start:end]
+        
+        return {
+            "courses": paginated_courses,
+            "total": total,
+            "page": page,
+            "size": size,
+            "pages": (total + size - 1) // size
+        }
+    except Exception as e:
+        logger.error(f"获取已完成课程失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取已完成课程失败")

@@ -551,6 +551,8 @@ async def get_courses(
     search: Optional[str] = Query(None),
     category_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    featured: Optional[bool] = Query(None, description="是否只获取精选课程"),
+    hot: Optional[bool] = Query(None, description="是否只获取热门课程"),
     sort_by: str = Query("created_at", description="排序字段: created_at, updated_at, title, price, view_count, is_featured, is_hot"),
     sort_order: str = Query("desc", description="排序方向: asc, desc"),
     current_user: Optional[User] = Depends(get_current_user_optional),
@@ -580,6 +582,14 @@ async def get_courses(
     # 状态过滤
     if status:
         query = query.filter(Course.status == status)
+    
+    # 精选课程过滤
+    if featured is not None:
+        query = query.filter(Course.is_featured == featured)
+    
+    # 热门课程过滤
+    if hot is not None:
+        query = query.filter(Course.is_hot == hot)
     
     # 排序逻辑
     valid_sort_fields = {
@@ -834,7 +844,7 @@ async def create_lesson(
     # 提取media_ids并从lesson_data中移除，避免传递给CourseLesson构造函数
     media_ids = lesson_data.media_ids
     lesson_dict = lesson_data.dict(exclude={'media_ids'})
-    lesson_dict['duration'] = lesson_dict['duration'] * 60
+    lesson_dict['duration'] = lesson_dict['duration']
     
     # 验证媒体文件
     if media_ids:
@@ -903,6 +913,49 @@ async def get_lessons(
     
     return lessons
 
+@router.get("/lessons/{lesson_id}/media")
+async def get_lesson_media(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """获取课时的媒体文件列表"""
+    lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
+    if not lesson:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="课时不存在"
+        )
+    
+    # 权限检查：普通用户只能查看已发布课程的课时
+    if not current_user or current_user.role not in ['admin', 'superadmin']:
+        if lesson.course.status != CourseStatus.PUBLISHED:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
+    
+    # 获取课时的媒体文件
+    from models.media import Media
+    media_files = db.query(Media).filter(Media.lesson_id == lesson_id).all()
+    
+    return {
+        "lesson_id": lesson_id,
+        "lesson_title": lesson.title,
+        "media_files": [
+            {
+                "id": media.id,
+                "filename": media.filename,
+                "filepath": media.filepath or "",  # 确保filepath不为None
+                "media_type": media.media_type,
+                "duration": media.duration,
+                "size": media.size,
+                "cover_url": media.cover_url,
+                "upload_time": media.upload_time.isoformat() if media.upload_time else None
+            } for media in media_files
+        ]
+    }
+
 @router.put("/lessons/{lesson_id}", response_model=CourseLessonResponse)
 async def update_lesson(
     lesson_id: str,
@@ -920,13 +973,53 @@ async def update_lesson(
             detail="课时不存在"
         )
 
+    # 处理媒体文件关联更新
+    if hasattr(lesson_data, 'media_ids') and lesson_data.media_ids is not None:
+        from models.media import Media
+        
+        # 获取当前关联的媒体文件
+        current_media = db.query(Media).filter(Media.lesson_id == lesson_id).all()
+        current_media_ids = {media.id for media in current_media}
+        new_media_ids = set(lesson_data.media_ids) if lesson_data.media_ids else set()
+        
+        # 找出需要取消关联的媒体文件
+        media_to_remove = current_media_ids - new_media_ids
+        for media_id in media_to_remove:
+            media = db.query(Media).filter(Media.id == media_id).first()
+            if media:
+                media.lesson_id = None
+                logger.info(f"取消媒体文件 {media_id} 与课时 {lesson_id} 的关联")
+        
+        # 找出需要新增关联的媒体文件
+        media_to_add = new_media_ids - current_media_ids
+        for media_id in media_to_add:
+            # 检查媒体文件是否存在
+            media = db.query(Media).filter(Media.id == media_id).first()
+            if not media:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"媒体文件不存在: {media_id}"
+                )
+            
+            # 检查媒体文件是否已经被其他课时关联
+            if media.lesson_id is not None and media.lesson_id != lesson_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
+                )
+            
+            # 关联媒体文件到当前课时
+            media.lesson_id = lesson_id
+            logger.info(f"关联媒体文件 {media_id} 到课时 {lesson_id}")
+
     if lesson_data.duration:
-        lesson_data.duration = lesson_data.duration * 60
+        lesson_data.duration = lesson_data.duration
 
     # 更新课时信息
     update_data = lesson_data.dict(exclude_unset=True)
     for field, value in update_data.items():
-        setattr(lesson, field, value)
+        if field != 'media_ids':  # 排除media_ids，因为已经单独处理
+            setattr(lesson, field, value)
     
     db.commit()
     db.refresh(lesson)

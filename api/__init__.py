@@ -5,7 +5,6 @@ API模块包初始化文件 - 完整版本
 
 from .auth import router as auth_router
 from .health import router as health_router
-from .video import router as video_router
 from .images import router as images_router
 from .media import router as media_router
 
@@ -14,20 +13,17 @@ from .courses import router as courses_router
 from .orders import router as orders_router
 from .learning import router as learning_router
 from .membership import router as membership_router
-from .lesson_materials import router as lesson_router
 
 # 基础路由列表
 base_routers = [
     "auth_router",
     "health_router",
-    "video_router",
     "images_router",
     "media_router",
     "courses_router",
     "orders_router",
     "learning_router",
     "membership_router",
-    "lesson_router"
 ]
 
 # AI相关路由（可选，根据依赖可用性动态导入）

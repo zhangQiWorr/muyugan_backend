@@ -141,12 +141,11 @@ class CourseLessonCreate(CourseLessonBase):
 class CourseLessonUpdate(BaseSchema):
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
-
-
     content_text: Optional[str] = None
     duration: Optional[int] = Field(None, ge=0)
     sort_order: Optional[int] = None
     is_free: Optional[bool] = None
+    media_ids: Optional[List[str]] = Field(None, description="关联的媒体文件ID列表")
 
 
 class CourseLessonResponse(CourseLessonBase):
@@ -470,26 +469,6 @@ class AgentCreate(BaseModel):
 # 解决循环引用
 CourseCategoryResponse.model_rebuild()
 
-# 视频相关Schema
-class VideoUploadRequest(BaseModel):
-    title: str
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-    is_public: bool = True
-
-class VideoInfoResponse(BaseModel):
-    id: str
-    title: str
-    description: Optional[str] = None
-    file_path: str
-    file_size: int
-    duration: Optional[float] = None
-    thumbnail_path: Optional[str] = None
-    tags: List[str] = []
-    is_public: bool
-    uploader_id: str
-    created_at: datetime
-    updated_at: datetime
 
 # 图片相关Schema
 class ImageUploadRequest(BaseModel):
@@ -573,18 +552,6 @@ class ChatRequest(BaseModel):
 class ConversationUpdate(BaseModel):
     tags: Optional[List[str]] = None
 
-# 视频信息响应（修复不完整的类定义）
-class VideoInfoDetailResponse(BaseModel):
-    description: Optional[str]
-    filename: str
-    filepath: Optional[str]  # 添加文件路径字段
-    cover_url: Optional[str]
-    duration: Optional[int]
-    size: Optional[int]  # 视频大小，单位B
-    upload_time: Optional[str]
-
-class VideoListResponse(BaseModel):
-    videos: List[VideoInfoResponse]
 
 # 健康检查Schema
 class HealthResponse(BaseModel):
@@ -608,7 +575,7 @@ class MediaInfoResponse(BaseModel):
     id: str
     description: Optional[str] = None
     filename: str
-    filepath: str
+    filepath: Optional[str] = None  # 修改为可选字段
     media_type: str  # "video" or "audio"
     cover_url: Optional[str] = None
     duration: Optional[int] = None
@@ -669,8 +636,9 @@ class PlayEventData(BaseModel):
     user_id: str
     media_id: str  # 修改为 media_id 以匹配前端发送的字段
     event_type: str  # play, pause, seek, heartbeat, ended
-    current_time: float
+    current_time: Optional[float] = None
     previous_time: Optional[float] = None
+    duration_time: Optional[float] = None
     progress: Optional[float] = None
     playback_rate: Optional[float] = 1.0
     volume: Optional[float] = 1.0

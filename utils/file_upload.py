@@ -14,8 +14,8 @@ from services.logger import get_logger
 logger = get_logger("file_upload")
 
 # 配置
-UPLOAD_DIR = "/static/images/src_avatars"
-AVATAR_DIR = "/static/images/avatars"
+UPLOAD_DIR = "static/images/src_avatars"
+AVATAR_DIR = "static/images/avatars"
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
 AVATAR_SIZES = {
@@ -100,7 +100,7 @@ def process_avatar_image(image_data: bytes, filename: str) -> dict:
             file_path = os.path.join(AVATAR_DIR, size_filename)
             canvas.save(file_path, 'JPEG', quality=85, optimize=True)
             
-            avatar_paths[size_name] = file_path
+            avatar_paths[size_name] = f"/{file_path}"
         
         logger.info(f"✅ 头像处理完成: {filename}")
         return avatar_paths
@@ -173,7 +173,7 @@ def delete_avatar_files(avatar_url: str):
     删除头像文件
     
     Args:
-        avatar_url: 头像URL
+        avatar_url: 头像URL (可能是任何尺寸的头像URL)
     """
     try:
         if not avatar_url:
@@ -181,24 +181,54 @@ def delete_avatar_files(avatar_url: str):
             
         # 从URL中提取文件名
         filename = Path(avatar_url).name
+        logger.info(f"要删除的头像URL: {avatar_url}")
+        logger.info(f"提取的文件名: {filename}")
         
-        # 删除原始文件
-        original_path = os.path.join(UPLOAD_DIR, filename)
-        if os.path.exists(original_path):
-            os.remove(original_path)
+        # 从文件名中提取基础名称（去掉尺寸后缀）
+        base_name = Path(filename).stem
+        logger.info(f"原始基础文件名: {base_name}")
+        
+        # 如果文件名包含尺寸后缀，去掉它
+        for size_name in AVATAR_SIZES.keys():
+            if base_name.endswith(f"_{size_name}"):
+                base_name = base_name[:-len(f"_{size_name}")]
+                logger.info(f"去掉尺寸后缀后的基础文件名: {base_name}")
+                break
+        
+        # 获取项目根目录
+        project_root = Path(__file__).parent.parent
+        
+        # 删除原始文件（尝试不同的扩展名）
+        for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+            original_filename = f"{base_name}{ext}"
+            original_path = project_root / UPLOAD_DIR / original_filename
+            logger.info(f"尝试原始文件路径: {original_path}")
+            
+            if original_path.exists():
+                original_path.unlink()
+                logger.info(f"✅ 原始文件已删除: {original_filename}")
+                break
+        else:
+            logger.warning(f"⚠️ 原始文件不存在，尝试了所有扩展名")
         
         # 删除不同尺寸的文件
-        base_name = Path(filename).stem
         for size_name in AVATAR_SIZES.keys():
             size_filename = f"{base_name}_{size_name}.jpg"
-            size_path = os.path.join(AVATAR_DIR, size_filename)
-            if os.path.exists(size_path):
-                os.remove(size_path)
+            size_path = project_root / AVATAR_DIR / size_filename
+            logger.info(f"{size_name}文件路径: {size_path}")
+            
+            if size_path.exists():
+                size_path.unlink()
+                logger.info(f"✅ {size_name}文件已删除: {size_filename}")
+            else:
+                logger.warning(f"⚠️ {size_name}文件不存在: {size_path}")
         
-        logger.info(f"✅ 头像文件删除成功: {filename}")
+        logger.info(f"✅ 头像文件删除完成: {filename}")
         
     except Exception as e:
         logger.error(f"❌ 头像文件删除失败: {str(e)}")
+        import traceback
+        logger.error(f"错误详情: {traceback.format_exc()}")
 
 
 def get_default_avatar_url() -> str:

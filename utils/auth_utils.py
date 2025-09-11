@@ -56,7 +56,7 @@ async def get_current_user_optional(
 
 def check_admin_permission(user: User):
     """检查管理员权限"""
-    if user.role not in ['teacher', 'superadmin']:
+    if user.role not in ['admin', 'teacher', 'superadmin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="需要管理员权限"

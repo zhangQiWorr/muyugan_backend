@@ -772,6 +772,13 @@ async def report_play_event(
         if not media:
             raise HTTPException(status_code=404, detail="媒体文件不存在")
         
+        # 检查并更新媒体文件时长
+        if event_data.duration_time and media.duration != event_data.duration_time:
+            # 如果上报的时长与数据库中的不一致,更新数据库中的时长
+            logger.info(f"更新媒体文件时长: {media.id} - 原时长:{media.duration}s, 新时长:{event_data.duration_time}s")
+            media.duration = event_data.duration_time
+            db.commit()
+
         # 创建视频播放服务实例
         video_service = MediaPlayService(db)
         
