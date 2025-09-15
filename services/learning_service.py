@@ -2,6 +2,7 @@
 学习记录服务
 处理用户学习行为的记录和查询
 """
+import uuid
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, and_
@@ -11,6 +12,9 @@ from models.course import Course, CourseLesson, LearningProgress, CourseEnrollme
 from models.media import Media
 from models.media_play_record import MediaPlayRecord
 from services.logger import get_logger
+
+# 课时完成阈值常量（百分比）
+LESSON_COMPLETION_THRESHOLD = 90.0
 
 logger = get_logger("learning_service")
 
@@ -37,24 +41,10 @@ class LearningService:
             if not lesson:
                 raise ValueError(f"课时不存在: {lesson_id}")
             
-            # 获取或创建课程报名记录
-            enrollment = self.db.query(CourseEnrollment).filter(
-                and_(
-                    CourseEnrollment.user_id == user_id,
-                    CourseEnrollment.course_id == lesson.course_id
-                )
-            ).first()
-            
-            if not enrollment:
-                # 创建新的报名记录
-                enrollment = CourseEnrollment(
-                    user_id=user_id,
-                    course_id=lesson.course_id,
-                    is_active=True,
-                    enrolled_at=datetime.now()
-                )
-                self.db.add(enrollment)
-                self.db.flush()  # 获取ID
+            # 获取课程信息（用于日志记录）
+            course = self.db.query(Course).filter(Course.id == lesson.course_id).first()
+            if not course:
+                raise ValueError(f"课程不存在: {lesson.course_id}")
             
             # 检查是否已有学习进度记录
             progress = self.db.query(LearningProgress).filter(
@@ -70,7 +60,6 @@ class LearningService:
                     user_id=user_id,
                     course_id=lesson.course_id,
                     lesson_id=lesson_id,
-                    enrollment_id=enrollment.id,
                     started_at=datetime.now(),
                     last_watched_at=datetime.now()
                 )
@@ -80,7 +69,8 @@ class LearningService:
                 progress.last_watched_at = datetime.now()
             
             self.db.commit()
-            logger.info(f"用户 {user_id} 开始学习课时 {lesson_id}")
+            course_type = "免费课程" if course.is_free else "付费课程"
+            logger.info(f"用户 {user_id} 开始学习{course_type}课时 {lesson_id}")
             return progress
             
         except Exception as e:
@@ -149,8 +139,8 @@ class LearningService:
             if total_duration > 0:
                 play_record.progress = min(watch_duration / total_duration, 1.0)
             
-            # 判断是否完成观看（观看进度达到90%）
-            if play_record.progress >= 0.9:
+            # 判断是否完成观看（观看进度达到指定阈值）
+            if play_record.progress >= 0.9:  # 注意：这里的0.9是媒体播放记录的完成阈值，与课程学习的阈值不同
                 play_record.completed = True
                 play_record.completed_at = datetime.now()
                 logger.info(f"用户 {user_id} 完成观看媒体 {media_id}")
@@ -272,7 +262,7 @@ class LearningService:
             
             # 判断是否完成学习（进度达到90%或所有媒体都完成）
             is_completed = (
-                lesson_progress['progress_percentage'] >= 90.0 or 
+                lesson_progress['progress_percentage'] >= LESSON_COMPLETION_THRESHOLD or 
                 lesson_progress['completed_media'] == lesson_progress['total_media']
             )
             
@@ -324,7 +314,7 @@ class LearningService:
                         'course': course,
                         'progress': progress,
                         'lesson': lesson,
-                        'last_learned_at': progress.last_watched_at
+                        'last_watch_at': progress.last_watched_at
                     }
             
             # 转换为返回格式
@@ -346,7 +336,7 @@ class LearningService:
                     'difficulty_level': course.difficulty_level,
                     'is_featured': course.is_featured,
                     'is_hot': course.is_hot,
-                    'last_learned_at': course_data['last_learned_at'].isoformat(),
+                    'last_watch_at': course_data['last_watch_at'].isoformat(),
                     'course_progress': course_progress,
                     'last_lesson': {
                         'lesson_id': course_data['lesson'].id,
@@ -372,13 +362,12 @@ class LearningService:
             Dict: 学习统计信息
         """
         try:
-            # 总学习时长（分钟）
+            # 总学习时长（秒）
             total_learning_time = self.db.query(
                 func.sum(LearningProgress.watch_duration)
             ).filter(
                 LearningProgress.user_id == user_id
             ).scalar() or 0
-            total_learning_time = total_learning_time // 60  # 转换为分钟
             
             # 已完成的课时数
             completed_lessons = self.db.query(LearningProgress).filter(
@@ -395,7 +384,10 @@ class LearningService:
                 LearningProgress.user_id == user_id
             ).scalar() or 0
             
-            # 最近7天学习时长
+            # 已完成的课程数
+            completed_courses = self._calculate_completed_courses(user_id)
+            
+            # 最近7天学习时长（秒）
             week_ago = datetime.now() - timedelta(days=7)
             recent_learning_time = self.db.query(
                 func.sum(LearningProgress.watch_duration)
@@ -405,7 +397,25 @@ class LearningService:
                     LearningProgress.last_watched_at >= week_ago
                 )
             ).scalar() or 0
-            recent_learning_time = recent_learning_time // 60  # 转换为分钟
+            
+            # 今日学习时长（秒）
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_duration = self.db.query(
+                func.sum(LearningProgress.watch_duration)
+            ).filter(
+                and_(
+                    LearningProgress.user_id == user_id,
+                    LearningProgress.last_watched_at >= today_start
+                )
+            ).scalar() or 0
+            
+            # 用户订阅课程数量
+            enrollment_count = self.db.query(CourseEnrollment).filter(
+                and_(
+                    CourseEnrollment.user_id == user_id,
+                    CourseEnrollment.is_active == True
+                )
+            ).count()
             
             # 学习连续天数
             learning_days = self._calculate_learning_streak(user_id)
@@ -413,9 +423,12 @@ class LearningService:
             return {
                 'total_learning_time': total_learning_time,
                 'completed_lessons': completed_lessons,
+                'completed_courses': completed_courses,
                 'learning_courses': learning_courses,
                 'recent_learning_time': recent_learning_time,
-                'learning_streak_days': learning_days
+                'learning_streak_days': learning_days,
+                'today_duration': today_duration,
+                'enrollment_count': enrollment_count
             }
             
         except Exception as e:
@@ -460,17 +473,17 @@ class LearningService:
                 # 累加观看时长
                 total_watch_duration += lesson_progress['total_watch_duration']
                 total_duration += lesson_progress['total_duration']
-                
                 # 判断课时是否完成（进度达到90%或所有媒体都完成）
-                if (lesson_progress['progress_percentage'] >= 90.0 or 
+                if (lesson_progress['progress_percentage'] >= LESSON_COMPLETION_THRESHOLD or 
                     lesson_progress['completed_media'] == lesson_progress['total_media']):
                     completed_lessons += 1
-            
+
             # 计算课程进度百分比
             progress_percentage = (completed_lessons / len(lessons)) * 100 if lessons else 0.0
+            logger.info(f"✅ 计算课程进度成功: 课程【{course_id}】进度: {progress_percentage:.1f}%")
             
             return {
-                'progress_percentage': round(progress_percentage, 1),
+                'progress_percentage':min(round(progress_percentage, 1), 100) ,
                 'completed_lessons': completed_lessons,
                 'total_lessons': len(lessons),
                 'total_watch_duration': total_watch_duration,
@@ -487,6 +500,40 @@ class LearningService:
                 'total_duration': 0
             }
     
+    def _calculate_completed_courses(self, user_id: str) -> int:
+        """
+        计算用户已完成的课程数量
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            int: 已完成的课程数量
+        """
+        try:
+            # 获取用户学习过的所有课程
+            user_courses = self.db.query(
+                func.distinct(LearningProgress.course_id)
+            ).filter(
+                LearningProgress.user_id == user_id
+            ).all()
+            
+            completed_courses = 0
+            
+            for (course_id,) in user_courses:
+                # 计算课程进度，使用与get_completed_courses相同的逻辑
+                course_progress = self._calculate_course_progress(user_id, course_id)
+                
+                # 如果课程进度达到阈值，则认为课程已完成
+                if course_progress['progress_percentage'] >= LESSON_COMPLETION_THRESHOLD:
+                    completed_courses += 1
+            
+            return completed_courses
+            
+        except Exception as e:
+            logger.error(f"计算已完成课程数量失败: {str(e)}")
+            return 0
+
     def _calculate_learning_streak(self, user_id: str) -> int:
         """
         计算学习连续天数

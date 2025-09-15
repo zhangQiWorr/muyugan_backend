@@ -86,12 +86,23 @@ async def get_all_users(
     search: Optional[str] = Query(None),
     role: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
+    sort_by: str = Query("last_login", description="排序字段: last_login, created_at, username"),
+    sort_order: str = Query("desc", description="排序顺序: asc, desc"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取所有用户列表
     
     超级管理员可以查看、搜索和筛选所有用户账户
+    
+    Args:
+        page: 页码，从1开始
+        size: 每页数量，1-100之间
+        search: 搜索关键词，支持用户名、邮箱、手机号
+        role: 角色筛选 (user, teacher, superadmin)
+        is_active: 状态筛选 (True/False)
+        sort_by: 排序字段 (last_login, created_at, username)，默认为last_login
+        sort_order: 排序顺序 (asc, desc)，默认为desc
     """
     try:
         # 构建查询条件
@@ -111,6 +122,31 @@ async def get_all_users(
             
         if is_active is not None:
             query = query.filter(User.is_active == is_active)
+        
+        # 排序
+        valid_sort_fields = {
+            "last_login": User.last_login,
+            "created_at": User.created_at,
+            "username": User.username
+        }
+        
+        if sort_by in valid_sort_fields:
+            sort_field = valid_sort_fields[sort_by]
+            if sort_order.lower() == "asc":
+                if sort_by == "last_login":
+                    # 对于last_login字段，NULL值排在最后
+                    query = query.order_by(sort_field.asc().nulls_last())
+                else:
+                    query = query.order_by(sort_field.asc())
+            else:  # 默认desc
+                if sort_by == "last_login":
+                    # 对于last_login字段，NULL值排在最后
+                    query = query.order_by(sort_field.desc().nulls_last())
+                else:
+                    query = query.order_by(sort_field.desc())
+        else:
+            # 默认按最后登录时间降序排序，NULL值排在最后
+            query = query.order_by(User.last_login.desc().nulls_last())
         
         # 分页
         total = query.count()

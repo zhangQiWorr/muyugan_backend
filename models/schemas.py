@@ -192,6 +192,10 @@ class CourseUpdate(BaseSchema):
     status: Optional[str] = None
 
 
+class CourseDelete(BaseSchema):
+    isDeleteLesson: bool = Field(False, description="是否同时删除该课程下的所有课时")
+
+
 
 class CourseResponse(CourseBase):
     id: str
@@ -379,7 +383,7 @@ class CourseEnrollmentResponse(BaseSchema):
     enrolled_at: datetime
     completed_at: Optional[datetime] = None
     progress_percentage: float
-    last_learned_at: Optional[datetime] = None
+    last_watch_at: Optional[datetime] = None
 
 
 # 评价相关Schema

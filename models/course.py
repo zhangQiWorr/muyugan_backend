@@ -1,7 +1,7 @@
 """
 课程相关模型定义
 """
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, Float, ForeignKey, Enum, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, Float, ForeignKey, Enum, UniqueConstraint, event
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -69,7 +69,7 @@ class Course(Base):
     is_member_only = Column(Boolean, default=False)  # 是否仅会员可见
     
     # 课程信息
-    duration = Column(Integer, default=0)  # 总时长（分钟）
+    duration = Column(Integer, default=0)  # 总时长（秒）
     lesson_count = Column(Integer, default=0)  # 课时数量
     difficulty_level = Column(String(20), default="beginner")  # 难度级别
     language = Column(String(20), default="zh-CN")  # 语言
@@ -113,7 +113,7 @@ class CourseLesson(Base):
     
     # 内容相关
     content_text = Column(Text, nullable=True)  # 文本内容
-    duration = Column(Integer, default=0)  # 时长（分钟）
+    duration = Column(Integer, default=0)  # 时长（秒）
     
     # 排序和状态
     sort_order = Column(Integer, default=0)
@@ -145,12 +145,11 @@ class CourseEnrollment(Base):
     
     # 学习进度
     progress_percentage = Column(Float, default=0.0)  # 进度百分比
-    last_learned_at = Column(DateTime, nullable=True)
+    last_watch_at = Column(DateTime, nullable=True)
     
     # 关系
     user = relationship("User")
     course = relationship("Course", back_populates="enrollments")
-    progress_records = relationship("LearningProgress", back_populates="enrollment", cascade="all, delete-orphan")
     
     # 唯一约束：一个用户只能报名一次同一门课程
     __table_args__ = (UniqueConstraint('user_id', 'course_id', name='uq_user_course_enrollment'),)
@@ -164,7 +163,6 @@ class LearningProgress(Base):
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
     course_id = Column(String, ForeignKey("courses.id"), nullable=False)
     lesson_id = Column(String, ForeignKey("course_lessons.id"), nullable=False)
-    enrollment_id = Column(String, ForeignKey("course_enrollments.id"), nullable=False)
     
     # 学习状态
     is_completed = Column(Boolean, default=False)
@@ -180,7 +178,6 @@ class LearningProgress(Base):
     user = relationship("User")
     course = relationship("Course")
     lesson = relationship("CourseLesson", back_populates="progress_records")
-    enrollment = relationship("CourseEnrollment", back_populates="progress_records")
 
 
 class CourseReview(Base):
@@ -226,3 +223,34 @@ class CourseFavorite(Base):
     
     # 唯一约束：一个用户只能收藏一次同一门课程
     __table_args__ = (UniqueConstraint('user_id', 'course_id', name='uq_user_course_favorite'),)
+
+
+# 事件监听器：自动更新课程时长
+def update_course_duration_on_lesson_change(mapper, connection, target):
+    """课时变化时自动更新课程时长"""
+    from sqlalchemy import text
+    
+    # 计算课程的总时长和课时数
+    query = text("""
+        UPDATE courses 
+        SET 
+            duration = COALESCE((
+                SELECT SUM(duration) 
+                FROM course_lessons 
+                WHERE course_id = :course_id AND is_active = true
+            ), 0),
+            lesson_count = (
+                SELECT COUNT(*) 
+                FROM course_lessons 
+                WHERE course_id = :course_id AND is_active = true
+            )
+        WHERE id = :course_id
+    """)
+    
+    connection.execute(query, {"course_id": target.course_id})
+
+
+# 注册事件监听器
+event.listen(CourseLesson, 'after_insert', update_course_duration_on_lesson_change)
+event.listen(CourseLesson, 'after_update', update_course_duration_on_lesson_change)
+event.listen(CourseLesson, 'after_delete', update_course_duration_on_lesson_change)

@@ -24,6 +24,7 @@ from models.schemas import (
 from models.user import User
 from utils.auth_utils import get_current_user
 from services.logger import get_logger
+from services.learning_service import LearningService
 
 logger = get_logger("media_api")
 
@@ -604,6 +605,16 @@ async def generate_presign_url(
         
         db.commit()
         
+        # 自动开始学习记录（如果媒体文件关联了课时）
+        try:
+            if media.lesson_id:
+                # 调用start_lesson接口
+                from api.learning import start_lesson
+                await start_lesson(media.lesson_id, current_user, db)
+                logger.info(f"📚 自动开始学习记录: 用户{current_user.id} 开始学习课时{media.lesson_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ 自动开始学习记录失败: {str(e)}")
+        
         # 检查文件存储类型
         if str(media.storage_type) == "oss" and media.oss_key is not None:
             # OSS文件处理
@@ -796,6 +807,23 @@ async def report_play_event(
             device_info=event_data.device_info,
             extra_data=event_data.extra_data
         )
+        
+        # 自动更新学习进度（如果媒体文件关联了课时）
+        # 只在特定事件下更新，避免不必要的数据库操作
+        if event_data.event_type in ["pause", "ended", "heartbeat"]:
+            try:
+                if media.lesson_id:
+                    learning_service = LearningService(db)
+                    
+                    # 更新课时学习进度（内部会自动更新媒体观看进度）
+                    lesson_progress = learning_service.update_lesson_progress(
+                        current_user.id,
+                        media.lesson_id
+                    )
+                    logger.info(f"📚 自动更新课时学习进度: 用户{current_user.id} 课时{media.lesson_id} 事件:{event_data.event_type}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ 自动更新学习进度失败: {str(e)}")
         
         logger.info(f"✅ 播放事件上报成功: {event_data.event_type} - 用户:{event_data.user_id} 媒体:{event_data.media_id}")
         

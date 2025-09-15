@@ -17,7 +17,7 @@ from models.user import User
 from models.course import Course, CourseCategory, CourseLesson, CourseStatus
 from models.promotion import CoursePromotion, PromotionType, PromotionStatus, CourseTag, CourseTagRelation
 from models.schemas import (
-    CourseCreate, CourseUpdate, CourseResponse, CourseListResponse,
+    CourseCreate, CourseUpdate, CourseDelete, CourseResponse, CourseListResponse,
     CourseCategoryCreate, CourseCategoryUpdate, CourseCategoryResponse,
     CourseLessonCreate, CourseLessonUpdate, CourseLessonResponse,
     SuccessResponse
@@ -696,10 +696,25 @@ async def update_course(
 @router.delete("/{course_id}", response_model=SuccessResponse)
 async def delete_course(
     course_id: str,
+    delete_data: CourseDelete,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """删除课程（管理员）"""
+    """删除课程（管理员）
+    
+    Args:
+        course_id: 课程ID
+        delete_data: 删除参数，包含isDeleteLesson字段
+        current_user: 当前用户
+        db: 数据库会话
+        
+    Returns:
+        SuccessResponse: 删除成功响应
+        
+    Note:
+        - 如果isDeleteLesson为True，会同时删除该课程下的所有课时
+        - 如果isDeleteLesson为False且有课时，则不允许删除课程
+    """
     check_admin_permission(current_user)
     
     try:
@@ -716,10 +731,26 @@ async def delete_course(
             CourseLesson.is_active == True
         ).count()
         
-        if lesson_count > 0:
+        # 如果isDeleteLesson为True，删除该课程下的所有课时
+        if delete_data.isDeleteLesson and lesson_count > 0:
+            # 删除课程下的所有课时
+            lessons = db.query(CourseLesson).filter(
+                CourseLesson.course_id == course_id,
+                CourseLesson.is_active == True
+            ).all()
+            
+            for lesson in lessons:
+                # 使用CourseService删除课时（会自动更新课程时长）
+                from services.course_service import CourseService
+                course_service = CourseService(db)
+                course_service.delete_lesson(lesson.id)
+            
+            logger.info(f"Deleted {lesson_count} lessons for course {course_id}")
+        elif lesson_count > 0:
+            # 如果isDeleteLesson为False且有课时，则不允许删除
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"课程下还有 {lesson_count} 个课时，请先删除所有课时后再删除课程"
+                detail=f"课程下还有 {lesson_count} 个课时，请先删除所有课时后再删除课程，或设置 isDeleteLesson 为 true"
             )
         
         # 删除课程标签关联
@@ -833,61 +864,69 @@ async def create_lesson(
     """创建课时（管理员）"""
     check_admin_permission(current_user)
     
-    # 检查课程是否存在
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课程不存在"
-        )
+    try:
+        # 检查课程是否存在
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课程不存在"
+            )
 
-    # 提取media_ids并从lesson_data中移除，避免传递给CourseLesson构造函数
-    media_ids = lesson_data.media_ids
-    lesson_dict = lesson_data.dict(exclude={'media_ids'})
-    lesson_dict['duration'] = lesson_dict['duration']
-    
-    # 验证媒体文件
-    if media_ids:
-        from models.media import Media
-        for media_id in media_ids:
-            # 检查媒体文件是否存在
-            media = db.query(Media).filter(Media.id == media_id).first()
-            if not media:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"媒体文件不存在: {media_id}"
-                )
-            
-            # 检查媒体文件是否已经被其他课时关联
-            if media.lesson_id is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
-                )
-    
-    lesson = CourseLesson(**lesson_dict, course_id=course_id)
-    db.add(lesson)
-    db.commit()
-    db.refresh(lesson)
-    
-    # 如果提供了媒体文件ID，将课时ID关联到这些媒体文件
-    if media_ids:
-        from models.media import Media
-        for media_id in media_ids:
-            media = db.query(Media).filter(Media.id == media_id).first()
-            if media:
-                media.lesson_id = lesson.id
-        db.commit()
-    
-    # 更新课程课时数量
-    lesson_count = db.query(CourseLesson).filter(
-        CourseLesson.course_id == course_id,
-        CourseLesson.is_active == True
-    ).count()
-    setattr(course, 'lesson_count', lesson_count)
-    db.commit()
-    
-    return lesson
+        # 提取media_ids并从lesson_data中移除
+        media_ids = lesson_data.media_ids
+        lesson_dict = lesson_data.dict(exclude={'media_ids'})
+        
+        # 验证媒体文件
+        if media_ids:
+            from models.media import Media
+            for media_id in media_ids:
+                # 检查媒体文件是否存在
+                media = db.query(Media).filter(Media.id == media_id).first()
+                if not media:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"媒体文件不存在: {media_id}"
+                    )
+                
+                # 检查媒体文件是否已经被其他课时关联
+                if media.lesson_id is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
+                    )
+        
+        # 使用CourseService创建课时
+        from services.course_service import CourseService
+        course_service = CourseService(db)
+        
+        lesson = course_service.create_lesson(
+            course_id=course_id,
+            title=lesson_dict['title'],
+            description=lesson_dict.get('description'),
+            duration=lesson_dict.get('duration', 0),
+            sort_order=lesson_dict.get('sort_order', 0),
+            is_free=lesson_dict.get('is_free', False),
+            is_active=lesson_dict.get('is_active', True)
+        )
+        
+        # 如果提供了媒体文件ID，将课时ID关联到这些媒体文件
+        if media_ids:
+            from models.media import Media
+            for media_id in media_ids:
+                media = db.query(Media).filter(Media.id == media_id).first()
+                if media:
+                    media.lesson_id = lesson.id
+            db.commit()
+        
+        return lesson
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"创建课时失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建课时失败")
 
 @router.get("/{course_id}/lessons", response_model=List[CourseLessonResponse])
 async def get_lessons(
@@ -966,65 +1005,86 @@ async def update_lesson(
     """更新课时（管理员）"""
     check_admin_permission(current_user)
     
-    lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
-    if not lesson:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课时不存在"
+    try:
+        # 检查课时是否存在
+        lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
+        if not lesson:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
+
+        # 处理媒体文件关联更新
+        if hasattr(lesson_data, 'media_ids') and lesson_data.media_ids is not None:
+            from models.media import Media
+            
+            # 获取当前关联的媒体文件
+            current_media = db.query(Media).filter(Media.lesson_id == lesson_id).all()
+            current_media_ids = {media.id for media in current_media}
+            new_media_ids = set(lesson_data.media_ids) if lesson_data.media_ids else set()
+            
+            # 找出需要取消关联的媒体文件
+            media_to_remove = current_media_ids - new_media_ids
+            for media_id in media_to_remove:
+                media = db.query(Media).filter(Media.id == media_id).first()
+                if media:
+                    media.lesson_id = None
+                    logger.info(f"取消媒体文件 {media_id} 与课时 {lesson_id} 的关联")
+            
+            # 找出需要新增关联的媒体文件
+            media_to_add = new_media_ids - current_media_ids
+            for media_id in media_to_add:
+                # 检查媒体文件是否存在
+                media = db.query(Media).filter(Media.id == media_id).first()
+                if not media:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"媒体文件不存在: {media_id}"
+                    )
+                
+                # 检查媒体文件是否已经被其他课时关联
+                if media.lesson_id is not None and media.lesson_id != lesson_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
+                    )
+                
+                # 关联媒体文件到当前课时
+                media.lesson_id = lesson_id
+                logger.info(f"关联媒体文件 {media_id} 到课时 {lesson_id}")
+
+        # 使用CourseService更新课时
+        from services.course_service import CourseService
+        course_service = CourseService(db)
+        
+        # 准备更新数据
+        update_data = lesson_data.dict(exclude_unset=True)
+        update_data.pop('media_ids', None)  # 移除media_ids，因为已经单独处理
+        
+        lesson = course_service.update_lesson(
+            lesson_id=lesson_id,
+            title=update_data.get('title'),
+            description=update_data.get('description'),
+            duration=update_data.get('duration'),
+            sort_order=update_data.get('sort_order'),
+            is_free=update_data.get('is_free'),
+            is_active=update_data.get('is_active')
         )
-
-    # 处理媒体文件关联更新
-    if hasattr(lesson_data, 'media_ids') and lesson_data.media_ids is not None:
-        from models.media import Media
         
-        # 获取当前关联的媒体文件
-        current_media = db.query(Media).filter(Media.lesson_id == lesson_id).all()
-        current_media_ids = {media.id for media in current_media}
-        new_media_ids = set(lesson_data.media_ids) if lesson_data.media_ids else set()
+        if not lesson:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
         
-        # 找出需要取消关联的媒体文件
-        media_to_remove = current_media_ids - new_media_ids
-        for media_id in media_to_remove:
-            media = db.query(Media).filter(Media.id == media_id).first()
-            if media:
-                media.lesson_id = None
-                logger.info(f"取消媒体文件 {media_id} 与课时 {lesson_id} 的关联")
+        return lesson
         
-        # 找出需要新增关联的媒体文件
-        media_to_add = new_media_ids - current_media_ids
-        for media_id in media_to_add:
-            # 检查媒体文件是否存在
-            media = db.query(Media).filter(Media.id == media_id).first()
-            if not media:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"媒体文件不存在: {media_id}"
-                )
-            
-            # 检查媒体文件是否已经被其他课时关联
-            if media.lesson_id is not None and media.lesson_id != lesson_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"媒体文件 {media_id} 已经被其他课时关联，无法重复使用"
-                )
-            
-            # 关联媒体文件到当前课时
-            media.lesson_id = lesson_id
-            logger.info(f"关联媒体文件 {media_id} 到课时 {lesson_id}")
-
-    if lesson_data.duration:
-        lesson_data.duration = lesson_data.duration
-
-    # 更新课时信息
-    update_data = lesson_data.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        if field != 'media_ids':  # 排除media_ids，因为已经单独处理
-            setattr(lesson, field, value)
-    
-    db.commit()
-    db.refresh(lesson)
-    
-    return lesson
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新课时失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新课时失败")
 
 @router.delete("/lessons/{lesson_id}", response_model=SuccessResponse)
 async def delete_lesson(
@@ -1035,34 +1095,39 @@ async def delete_lesson(
     """删除课时（管理员）"""
     check_admin_permission(current_user)
     
-    lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
-    if not lesson:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="课时不存在"
-        )
-    
-    course_id = lesson.course_id
-    
-    # 取消媒体文件关联
-    media_files = lesson.media_files
-    for media in media_files:
-        media.lesson_id = None
-    
-    db.delete(lesson)
-    db.commit()
-    
-    # 更新课程课时数量
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if course:
-        lesson_count = db.query(CourseLesson).filter(
-            CourseLesson.course_id == course_id,
-            CourseLesson.is_active == True
-        ).count()
-        setattr(course, 'lesson_count', lesson_count)
-        db.commit()
-    
-    return SuccessResponse(message="课时删除成功")
+    try:
+        # 检查课时是否存在
+        lesson = db.query(CourseLesson).filter(CourseLesson.id == lesson_id).first()
+        if not lesson:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
+        
+        # 取消媒体文件关联
+        media_files = lesson.media_files
+        for media in media_files:
+            media.lesson_id = None
+        
+        # 使用CourseService删除课时
+        from services.course_service import CourseService
+        course_service = CourseService(db)
+        
+        success = course_service.delete_lesson(lesson_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="课时不存在"
+            )
+        
+        return SuccessResponse(message="课时删除成功")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"删除课时失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="删除课时失败")
 
 # 课时媒体播放相关函数
 def handle_lesson_media_range_request(request: Request, file_path: str, file_size: int, content_type: str):
