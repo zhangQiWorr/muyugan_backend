@@ -4,17 +4,18 @@
 """
 
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 from models import get_db
 from models.user import User
-from models.course import Course, CourseCategory
+from models.course import Course, CourseCategory, CourseEnrollment
+from models.schemas import SuccessResponse
 from utils.auth_utils import get_current_user
 from utils.permission_utils import require_permission, Permissions
-from pydantic import BaseModel
 from services.logger import get_logger
 from auth.password_handler import PasswordHandler
 
@@ -75,6 +76,54 @@ class OperationLog(BaseModel):
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
     created_at: datetime
+
+# ==================== 课程报名管理模型 ====================
+
+class FreeEnrollmentRequest(BaseModel):
+    """免费报名请求"""
+    user_id: str = Field(..., description="用户ID")
+    course_ids: List[str] = Field(..., description="课程ID列表")
+
+class BatchEnrollmentResponse(BaseModel):
+    """批量报名响应"""
+    user_id: str
+    user_name: str
+    total_courses: int
+    success_count: int
+    failed_count: int
+    enrolled_count: int = Field(0, description="新报名数量")
+    deactivated_count: int = Field(0, description="取消报名数量")
+    reactivated_count: int = Field(0, description="重新激活数量")
+    already_enrolled_count: int = Field(0, description="已报名数量")
+    enrollments: List[dict] = Field(..., description="报名结果详情")
+    errors: List[dict] = Field(default_factory=list, description="错误信息")
+
+class FreeEnrollmentResponse(BaseModel):
+    """免费报名响应"""
+    id: str
+    user_id: str
+    course_id: str
+    course_title: str
+    enrolled_at: datetime
+    is_active: bool
+
+class DeleteEnrollmentRequest(BaseModel):
+    """删除报名请求"""
+    user_id: str = Field(..., description="用户ID")
+    course_ids: List[str] = Field(..., description="要删除的课程ID列表")
+
+class DeleteEnrollmentResponse(BaseModel):
+    """删除报名响应"""
+    user_id: str
+    user_name: str
+    total_courses: int
+    success_count: int
+    failed_count: int
+    deleted_count: int = Field(0, description="删除报名数量")
+    not_found_count: int = Field(0, description="未找到报名数量")
+    already_inactive_count: int = Field(0, description="已停用报名数量")
+    enrollments: List[dict] = Field(..., description="删除结果详情")
+    errors: List[dict] = Field(default_factory=list, description="错误信息")
 
 # ==================== 全局管理功能 ====================
 
@@ -325,7 +374,7 @@ async def get_role_permissions(
     
     超级管理员可以查看当前的角色权限配置
     """
-    from permission_utils import ROLE_PERMISSIONS, get_role_description
+    from utils.permission_utils import ROLE_PERMISSIONS, get_role_description
     
     try:
         role_configs = []
@@ -588,7 +637,7 @@ async def get_roles(
     
     超级管理员可以查看所有可用的角色
     """
-    from permission_utils import ROLE_PERMISSIONS, get_role_description
+    from utils.permission_utils import ROLE_PERMISSIONS, get_role_description
     
     try:
         roles = []
@@ -691,3 +740,363 @@ async def get_permissions(
     except Exception as e:
         logger.error(f"Error getting permissions: {str(e)}")
         raise HTTPException(status_code=500, detail="获取权限列表失败")
+
+# ==================== 课程报名管理功能 ====================
+
+@router.post("/enrollments/batch", response_model=BatchEnrollmentResponse)
+@require_permission(Permissions.MANAGE_USER_ROLES)
+async def batch_create_enrollments(
+    enrollment_data: FreeEnrollmentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """批量创建用户课程报名（超级管理员和管理员）"""
+    try:
+        # 检查目标用户是否存在
+        target_user = db.query(User).filter(User.id == enrollment_data.user_id).first()
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="目标用户不存在"
+            )
+        
+        # 检查课程是否存在
+        courses = db.query(Course).filter(Course.id.in_(enrollment_data.course_ids)).all()
+        course_dict = {course.id: course for course in courses}
+        
+        # 检查不存在的课程
+        missing_courses = [cid for cid in enrollment_data.course_ids if cid not in course_dict]
+        if missing_courses:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"以下课程不存在: {', '.join(missing_courses)}"
+            )
+        
+        # 批量处理报名
+        enrollments = []
+        errors = []
+        success_count = 0
+        failed_count = 0
+        enrolled_count = 0
+        reactivated_count = 0
+        already_enrolled_count = 0
+        
+        # 处理报名
+        for course_id in enrollment_data.course_ids:
+            try:
+                course = course_dict[course_id]
+                
+                # 检查是否已经报名过该课程
+                existing_enrollment = db.query(CourseEnrollment).filter(
+                    CourseEnrollment.user_id == enrollment_data.user_id,
+                    CourseEnrollment.course_id == course_id
+                ).first()
+                
+                if existing_enrollment:
+                    if existing_enrollment.is_active:
+                        # 已经报名过且激活，跳过
+                        enrollments.append({
+                            "course_id": course_id,
+                            "course_title": course.title,
+                            "status": "already_enrolled",
+                            "message": "用户已经报名过该课程"
+                        })
+                        success_count += 1
+                        already_enrolled_count += 1
+                    else:
+                        # 如果之前报名过但被禁用了，重新激活
+                        existing_enrollment.is_active = True
+                        existing_enrollment.enrolled_at = datetime.utcnow()
+                        db.commit()
+                        db.refresh(existing_enrollment)
+                        
+                        enrollments.append({
+                            "course_id": course_id,
+                            "course_title": course.title,
+                            "enrollment_id": existing_enrollment.id,
+                            "status": "reactivated",
+                            "message": "重新激活了之前的报名",
+                            "enrolled_at": existing_enrollment.enrolled_at.isoformat()
+                        })
+                        success_count += 1
+                        reactivated_count += 1
+                        
+                        logger.info(f"重新激活用户 {target_user.username} 的课程报名: {course.title}")
+                else:
+                    # 创建新的报名记录
+                    enrollment = CourseEnrollment(
+                        user_id=enrollment_data.user_id,
+                        course_id=course_id,
+                        is_active=True
+                    )
+                    
+                    db.add(enrollment)
+                    db.commit()
+                    db.refresh(enrollment)
+                    
+                    # 更新课程的报名数量
+                    course.enroll_count = (course.enroll_count or 0) + 1
+                    db.commit()
+                    
+                    enrollments.append({
+                        "course_id": course_id,
+                        "course_title": course.title,
+                        "enrollment_id": enrollment.id,
+                        "status": "created",
+                        "message": "成功创建报名",
+                        "enrolled_at": enrollment.enrolled_at.isoformat()
+                    })
+                    success_count += 1
+                    enrolled_count += 1
+                    
+                    logger.info(f"管理员 {current_user.username} 为用户 {target_user.username} 创建免费报名: {course.title}")
+                    
+            except Exception as e:
+                error_msg = f"处理课程 {course_id} 时发生错误: {str(e)}"
+                errors.append({
+                    "course_id": course_id,
+                    "course_title": course_dict.get(course_id, {}).get('title', '未知课程'),
+                    "error": error_msg
+                })
+                failed_count += 1
+                logger.error(error_msg)
+        
+        logger.info(f"批量创建报名完成: 用户 {target_user.username}, 成功 {success_count}, 失败 {failed_count}, 新报名 {enrolled_count}, 重新激活 {reactivated_count}, 已报名 {already_enrolled_count}")
+        
+        return BatchEnrollmentResponse(
+            user_id=enrollment_data.user_id,
+            user_name=target_user.username,
+            total_courses=len(enrollment_data.course_ids),
+            success_count=success_count,
+            failed_count=failed_count,
+            enrolled_count=enrolled_count,
+            deactivated_count=0,  # 不再有取消报名的功能
+            reactivated_count=reactivated_count,
+            already_enrolled_count=already_enrolled_count,
+            enrollments=enrollments,
+            errors=errors
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"批量创建报名失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="批量创建报名失败"
+        )
+
+@router.delete("/enrollments/batch", response_model=DeleteEnrollmentResponse)
+@require_permission(Permissions.MANAGE_USER_ROLES)
+async def batch_delete_enrollments(
+    delete_data: DeleteEnrollmentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """批量删除用户课程报名（超级管理员和管理员）"""
+    try:
+        # 检查目标用户是否存在
+        target_user = db.query(User).filter(User.id == delete_data.user_id).first()
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="目标用户不存在"
+            )
+        
+        # 检查课程是否存在
+        courses = db.query(Course).filter(Course.id.in_(delete_data.course_ids)).all()
+        course_dict = {course.id: course for course in courses}
+        
+        # 检查不存在的课程
+        missing_courses = [cid for cid in delete_data.course_ids if cid not in course_dict]
+        if missing_courses:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"以下课程不存在: {', '.join(missing_courses)}"
+            )
+        
+        # 批量处理删除报名
+        enrollments = []
+        errors = []
+        success_count = 0
+        failed_count = 0
+        deleted_count = 0
+        not_found_count = 0
+        already_inactive_count = 0
+        
+        # 处理删除报名
+        for course_id in delete_data.course_ids:
+            try:
+                course = course_dict[course_id]
+                
+                # 查找用户的报名记录
+                enrollment = db.query(CourseEnrollment).filter(
+                    CourseEnrollment.user_id == delete_data.user_id,
+                    CourseEnrollment.course_id == course_id
+                ).first()
+                
+                if not enrollment:
+                    # 没有找到报名记录
+                    enrollments.append({
+                        "course_id": course_id,
+                        "course_title": course.title,
+                        "status": "not_found",
+                        "message": "用户未报名该课程"
+                    })
+                    success_count += 1
+                    not_found_count += 1
+                elif not enrollment.is_active:
+                    # 报名记录已停用
+                    enrollments.append({
+                        "course_id": course_id,
+                        "course_title": course.title,
+                        "enrollment_id": enrollment.id,
+                        "status": "already_inactive",
+                        "message": "报名记录已停用"
+                    })
+                    success_count += 1
+                    already_inactive_count += 1
+                else:
+                    # 停用报名记录
+                    enrollment.is_active = False
+                    db.commit()
+                    
+                    # 更新课程的报名数量
+                    course.enroll_count = max((course.enroll_count or 0) - 1, 0)
+                    db.commit()
+                    
+                    enrollments.append({
+                        "course_id": course_id,
+                        "course_title": course.title,
+                        "enrollment_id": enrollment.id,
+                        "status": "deleted",
+                        "message": "成功删除报名"
+                    })
+                    success_count += 1
+                    deleted_count += 1
+                    
+                    logger.info(f"管理员 {current_user.username} 删除用户 {target_user.username} 的课程报名: {course.title}")
+                    
+            except Exception as e:
+                error_msg = f"删除课程 {course_id} 报名时发生错误: {str(e)}"
+                errors.append({
+                    "course_id": course_id,
+                    "course_title": course_dict.get(course_id, {}).get('title', '未知课程'),
+                    "error": error_msg
+                })
+                failed_count += 1
+                logger.error(error_msg)
+        
+        logger.info(f"批量删除报名完成: 用户 {target_user.username}, 成功 {success_count}, 失败 {failed_count}, 删除 {deleted_count}, 未找到 {not_found_count}, 已停用 {already_inactive_count}")
+        
+        return DeleteEnrollmentResponse(
+            user_id=delete_data.user_id,
+            user_name=target_user.username,
+            total_courses=len(delete_data.course_ids),
+            success_count=success_count,
+            failed_count=failed_count,
+            deleted_count=deleted_count,
+            not_found_count=not_found_count,
+            already_inactive_count=already_inactive_count,
+            enrollments=enrollments,
+            errors=errors
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"批量删除报名失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="批量删除报名失败"
+        )
+
+@router.get("/enrollments", response_model=List[FreeEnrollmentResponse])
+@require_permission(Permissions.VIEW_USERS)
+async def get_enrollments(
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(20, ge=1, le=100, description="每页数量"),
+    user_id: Optional[str] = Query(None, description="用户ID筛选"),
+    course_id: Optional[str] = Query(None, description="课程ID筛选"),
+    is_active: Optional[bool] = Query(None, description="是否激活状态筛选"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取课程报名列表（超级管理员和管理员）"""
+    try:
+        # 构建查询
+        query = db.query(CourseEnrollment)
+        
+        # 应用筛选条件
+        if user_id:
+            query = query.filter(CourseEnrollment.user_id == user_id)
+        if course_id:
+            query = query.filter(CourseEnrollment.course_id == course_id)
+        if is_active is not None:
+            query = query.filter(CourseEnrollment.is_active == is_active)
+        
+        # 分页
+        total = query.count()
+        enrollments = query.offset((page - 1) * size).limit(size).all()
+        
+        # 加载关联数据
+        result = []
+        for enrollment in enrollments:
+            course = db.query(Course).filter(Course.id == enrollment.course_id).first()
+            result.append(FreeEnrollmentResponse(
+                id=enrollment.id,
+                user_id=enrollment.user_id,
+                course_id=enrollment.course_id,
+                course_title=course.title if course else "未知课程",
+                enrolled_at=enrollment.enrolled_at,
+                is_active=enrollment.is_active
+            ))
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"获取报名列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取报名列表失败"
+        )
+
+@router.put("/enrollments/{enrollment_id}/deactivate", response_model=SuccessResponse)
+@require_permission(Permissions.MANAGE_USER_ROLES)
+async def deactivate_enrollment(
+    enrollment_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """停用课程报名（超级管理员和管理员）"""
+    try:
+        # 查找报名记录
+        enrollment = db.query(CourseEnrollment).filter(
+            CourseEnrollment.id == enrollment_id
+        ).first()
+        
+        if not enrollment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="报名记录不存在"
+            )
+        
+        # 停用报名
+        enrollment.is_active = False
+        db.commit()
+        
+        logger.info(f"管理员 {current_user.username} 停用了报名记录: {enrollment_id}")
+        
+        return SuccessResponse(message="报名已停用")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"停用报名失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="停用报名失败"
+        )

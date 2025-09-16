@@ -1109,6 +1109,9 @@ async def delete_lesson(
         for media in media_files:
             media.lesson_id = None
         
+        # 先提交媒体文件关联的取消
+        db.commit()
+        
         # 使用CourseService删除课时
         from services.course_service import CourseService
         course_service = CourseService(db)

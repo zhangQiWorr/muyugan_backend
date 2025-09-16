@@ -381,9 +381,6 @@ class CourseEnrollmentResponse(BaseSchema):
     course: CourseResponse
     is_active: bool
     enrolled_at: datetime
-    completed_at: Optional[datetime] = None
-    progress_percentage: float
-    last_watch_at: Optional[datetime] = None
 
 
 # 评价相关Schema

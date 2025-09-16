@@ -127,7 +127,7 @@ class CourseLesson(Base):
     # 关系
     course = relationship("Course", back_populates="lessons")
     progress_records = relationship("LearningProgress", back_populates="lesson", cascade="all, delete-orphan")
-    media_files = relationship("Media", back_populates="lesson", cascade="all, delete-orphan")
+    media_files = relationship("Media", back_populates="lesson")
 
 
 class CourseEnrollment(Base):
@@ -141,11 +141,6 @@ class CourseEnrollment(Base):
     # 报名状态
     is_active = Column(Boolean, default=True)
     enrolled_at = Column(DateTime, server_default=func.now())
-    completed_at = Column(DateTime, nullable=True)
-    
-    # 学习进度
-    progress_percentage = Column(Float, default=0.0)  # 进度百分比
-    last_watch_at = Column(DateTime, nullable=True)
     
     # 关系
     user = relationship("User")

@@ -191,7 +191,6 @@ class CourseService:
             
             self.db.commit()
             
-            logger.info(f"删除课时: {lesson_id}")
             return True
             
         except Exception as e:
