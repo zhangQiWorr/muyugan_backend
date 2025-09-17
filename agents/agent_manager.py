@@ -34,9 +34,9 @@ class AgentManager:
                 "display_name": "默认助手",
                 "description": "这是一个默认的AI助手，可以帮助您解答各种问题，提供信息查询、计算、翻译等服务。",
                 "avatar_url": "/static/avatars/default_assistant.png",
-                "model_name": "deepseek-v3",
-                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "api_key_name": "DASHSCOPE_API_KEY",
+                "model_name": "deepseek-reasoner",
+                "base_url": "https://api.deepseek.com",
+                "api_key_name": "DEEPSEEK_API_KEY",
                 "system_prompt": """你是一个友好、专业的AI助手，名字叫"默认助手"。你的主要职责是帮助用户解答问题、提供信息和完成各种任务。
 
 你的特点：

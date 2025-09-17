@@ -24,6 +24,7 @@ base_routers = [
     "orders_router",
     "learning_router",
     "membership_router",
+    "superadmin_router"
 ]
 
 # AI相关路由（可选，根据依赖可用性动态导入）
@@ -33,12 +34,14 @@ try:
     from .conversations import router as conversations_router
     from .chat import router as chat_router
     from .admin import router as admin_router
-    
+    from .superadmin import router as superadmin_router
+
     ai_routers = [
         "agents_router",
         "conversations_router",
         "chat_router",
         "admin_router",
+        "superadmin_router"
     ]
     
     __all__ = base_routers + ai_routers

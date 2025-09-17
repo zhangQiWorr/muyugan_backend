@@ -27,6 +27,7 @@ logger = get_logger("chat_api")
 chat_logger = get_logger("chat")
 router = APIRouter(prefix="/chat", tags=["聊天"])
 
+
 # 存储每个请求的中断标志
 stop_events = {}  # {request_id: asyncio.Event}
 

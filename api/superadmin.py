@@ -20,7 +20,7 @@ from services.logger import get_logger
 from auth.password_handler import PasswordHandler
 
 logger = get_logger("superadmin_api")
-router = APIRouter(prefix="/api/superadmin", tags=["超级管理员"])
+router = APIRouter(prefix="/superadmin", tags=["超级管理员"])
 password_handler = PasswordHandler()
 
 # 数据模型

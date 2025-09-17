@@ -25,15 +25,18 @@ from api import (
     auth_router,
     health_router,
     images_router,
-    media_router
+    media_router,
+    courses_router,
+    learning_router,
+    conversations_router,
+    agents_router,
+    superadmin_router,
+    chat_router
 )
 
 # 知识付费相关API路由导入
-from api.courses import router as courses_router
 from api.orders import router as orders_router
-from api.learning import router as learning_router
 from api.membership import router as membership_router
-from api.superadmin import router as superadmin_router
 
 # 获取主应用logger
 logger = get_logger("main")
@@ -126,29 +129,6 @@ def print_startup_banner():
 """
     print(banner)
 
-
-# 动态注册AI相关路由（如果依赖可用）
-def register_ai_routes():
-    """动态注册AI相关路由"""
-    try:
-        from api import (
-            agents_router,
-            conversations_router,
-            chat_router,
-            admin_router
-        )
-        
-        app.include_router(agents_router)
-        app.include_router(conversations_router)
-        app.include_router(chat_router)
-        app.include_router(admin_router)
-        
-        logger.info("✅ AI相关路由已注册")
-        return True
-    except ImportError as e:
-        logger.warning(f"⚠️ AI相关路由注册失败: {e}")
-        return False
-
 # 在lifespan中注册AI路由
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -224,14 +204,7 @@ async def lifespan(app: FastAPI):
             ai_deps_ok = False
     else:
         logger.info("ℹ️ AI功能未启用，系统以简化模式运行")
-    
-    # 尝试注册AI路由
-    if ai_deps_ok:
-        try:
-            register_ai_routes()
-        except Exception as e:
-            logger.warning(f"⚠️ AI路由注册失败: {e}")
-    
+
     if ai_deps_ok:
         logger.info("🎉 AI智能聊天 + 知识付费App后端系统启动完成!")
     else:
@@ -282,7 +255,10 @@ app.include_router(courses_router, prefix="/api")
 app.include_router(orders_router)
 app.include_router(learning_router)
 app.include_router(membership_router)
-app.include_router(superadmin_router)
+app.include_router(superadmin_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
+app.include_router(conversations_router, prefix="/api")
+app.include_router(agents_router, prefix="/api")
 
 # 健康检查
 @app.get("/health")
