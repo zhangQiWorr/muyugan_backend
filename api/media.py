@@ -119,7 +119,7 @@ async def handle_range_request_local(file_path: str, range_header: str, mime_typ
         with open(file_path, 'rb') as f:
             f.seek(start)
             remaining = content_length
-            chunk_size = 8192
+            chunk_size = 65536
             
             while remaining > 0:
                 chunk = f.read(min(chunk_size, remaining))
@@ -178,7 +178,7 @@ async def handle_range_request_oss(oss_key: str, range_header: str, mime_type: s
             if result and hasattr(result, 'body') and result.body:
                 body_stream = result.body
                 try:
-                    for chunk in body_stream.iter_bytes(block_size=8192):
+                    for chunk in body_stream.iter_bytes(block_size=65536):
                         if not chunk:
                             break
                         yield chunk

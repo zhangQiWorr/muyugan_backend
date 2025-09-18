@@ -146,6 +146,11 @@ async def lifespan(app: FastAPI):
     
     # 设置环境变量
     setup_environment()
+
+    # 基于环境变量控制是否启用AI相关功能，默认启用，可通过 ENABLE_AI=false 禁用
+    ai_enabled_env = os.getenv("ENABLE_AI", "true").lower() == "true"
+    if not ai_enabled_env:
+        ai_deps_ok = False
     
     # 启动时初始化
     if ai_deps_ok:
@@ -153,9 +158,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("🚀 正在启动知识付费App后端系统（简化模式）...")
     
-    # 创建数据库表
-    create_tables()
-    logger.info("✅ 数据库表已创建")
+    # 创建数据库表（可通过 AUTO_MIGRATE_ON_STARTUP=false 禁用，默认启用）
+    if os.getenv("AUTO_MIGRATE_ON_STARTUP", "true").lower() == "true":
+        create_tables()
+        logger.info("✅ 数据库表已创建")
+    else:
+        logger.info("⏭️ 已跳过启动时自动建表 (AUTO_MIGRATE_ON_STARTUP=false)")
     
     # 初始化基础管理器
     app.state.auth_handler = AuthHandler()
@@ -168,17 +176,23 @@ async def lifespan(app: FastAPI):
             from langgraph.checkpoint.postgres import PostgresSaver
             from agents.agent_manager import AgentManager
             
-            # 初始化检查点存储
+            # 初始化检查点存储（可通过 AI_USE_POSTGRES_CHECKPOINTS=true 启用Postgres）
+            checkpointer = None
             try:
-                database_url = os.getenv("DATABASE_URL")
-                if database_url:
-                    with PostgresSaver.from_conn_string(database_url) as checkpointer:
-                        checkpointer.setup()
-                        logger.info("✅ PostgreSQL检查点存储已初始化")
-                else:
-                    logger.warning("⚠️ DATABASE_URL环境变量未设置，跳过PostgreSQL检查点存储初始化")
+                if os.getenv("AI_USE_POSTGRES_CHECKPOINTS", "false").lower() == "true":
+                    database_url = os.getenv("DATABASE_URL")
+                    if database_url:
+                        with PostgresSaver.from_conn_string(database_url) as cp:
+                            cp.setup()
+                            logger.info("✅ PostgreSQL检查点存储已初始化")
+                            checkpointer = cp
+                    else:
+                        logger.warning("⚠️ DATABASE_URL未设置，跳过PostgreSQL检查点存储初始化")
+                if checkpointer is None:
+                    checkpointer = MemorySaver()
+                    logger.info("ℹ️ 使用内存检查点存储")
             except Exception as e:
-                logger.warning(f"⚠️ PostgreSQL连接失败，使用内存存储: {e}")
+                logger.warning(f"⚠️ 检查点初始化失败，回退到内存存储: {e}")
                 checkpointer = MemorySaver()
             
             # 初始化智能体管理器

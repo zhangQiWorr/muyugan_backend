@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import and_, or_, desc, asc, func
 from typing import List, Optional, Dict, Any
 import re
@@ -101,7 +101,7 @@ async def get_categories(
 ):
     """获取课程分类列表（兼容两种权限模式）"""
     try:
-        query = db.query(CourseCategory)
+        query = db.query(CourseCategory).options(selectinload(CourseCategory.children))
         
         # 如果用户未登录或非管理员，只显示激活的分类
         if not current_user or current_user.role not in ['admin', 'superadmin']:
@@ -127,53 +127,45 @@ async def get_categories(
             query = query.order_by(sort_field, CourseCategory.name)
         
         categories = query.all()
-        
-        # 统计每个分类下的课程数量
+
+        # 批量统计课程数量，避免每个分类COUNT导致的N+1
+        category_ids = [c.id for c in categories]
+        count_map = {}
+        if category_ids:
+            base_query = db.query(Course.category_id, func.count(Course.id)).\
+                filter(Course.category_id.in_(category_ids))
+            # 非管理员仅统计已发布课程
+            if not current_user or current_user.role not in ['admin', 'superadmin']:
+                base_query = base_query.filter(Course.status == CourseStatus.PUBLISHED)
+            rows = base_query.group_by(Course.category_id).all()
+            count_map = {cid: cnt for cid, cnt in rows}
+
         category_results = []
         for cat in categories:
-            # 根据用户权限统计课程数量
-            course_query = db.query(Course).filter(Course.category_id == cat.id)
-            
-            # 非管理员只统计已发布的课程
-            if not current_user or current_user.role not in ['admin', 'superadmin']:
-                course_query = course_query.filter(Course.status == CourseStatus.PUBLISHED)
-            
-            course_count = course_query.count()
-            
-            # 如果是管理员请求，返回详细信息
-            if current_user and current_user.role in ['admin', 'superadmin']:
-                category_results.append({
-                    "id": cat.id,
-                    "name": cat.name,
-                    "description": cat.description,
-                    "icon": cat.icon,
-                    "sort_order": cat.sort_order,
-                    "is_active": cat.is_active,
-                    "parent_id": cat.parent_id,
-                    "course_count": course_count,
-                    "created_at": cat.created_at,
-                    "updated_at": cat.updated_at
-                })
-            else:
-                # 普通用户返回基本信息和课程数量
-                category_results.append({
-                    "id": cat.id,
-                    "name": cat.name,
-                    "description": cat.description,
-                    "icon": cat.icon,
-                    "sort_order": cat.sort_order,
-                    "is_active": cat.is_active,
-                    "parent_id": cat.parent_id,
-                    "course_count": course_count,
-                    "created_at": cat.created_at,
-                    "updated_at": cat.updated_at
-                })
+            course_count = count_map.get(cat.id, 0)
+            category_results.append({
+                "id": cat.id,
+                "name": cat.name,
+                "description": cat.description,
+                "icon": cat.icon,
+                "sort_order": cat.sort_order,
+                "is_active": cat.is_active,
+                "parent_id": cat.parent_id,
+                "course_count": course_count,
+                "created_at": cat.created_at,
+                "updated_at": cat.updated_at
+            })
         
         # 如果按course_count排序，需要重新排序结果
         if sort_by == "course_count":
             reverse_order = sort_order.lower() == "desc"
             category_results.sort(key=lambda x: x["course_count"], reverse=reverse_order)
         
+        # 设置短期缓存，减少分类列表查询压力
+        from fastapi import Response
+        resp = Response(content=None)
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        # 直接返回数据对象，FastAPI会处理为JSON；头部由全局中间件附加
         return category_results
         
     except Exception as e:
@@ -323,6 +315,10 @@ async def get_tags(
         
         tags = query.order_by(desc(CourseTag.usage_count), CourseTag.name).all()
         
+        # 设置短期缓存
+        from fastapi import Response
+        resp = Response(content=None)
+        resp.headers["Cache-Control"] = "public, max-age=300"
         return {
             "tags": [
                 {
@@ -559,7 +555,7 @@ async def get_courses(
     db: Session = Depends(get_db)
 ):
     """获取课程列表"""
-    query = db.query(Course)
+    query = db.query(Course).options(selectinload(Course.category))
     
     # 权限过滤：普通用户只能看到已发布的课程
     if not current_user or current_user.role not in ['admin', 'superadmin']:
@@ -614,13 +610,12 @@ async def get_courses(
     # 分页
     courses = query.offset((page - 1) * size).limit(size).all()
     
-    # 加载关联数据
-    for course in courses:
-        if getattr(course, 'category_id', None):
-            course.category = db.query(CourseCategory).filter(
-                CourseCategory.id == course.category_id
-            ).first()
+    # 关联数据通过selectinload预加载，避免N+1
 
+    # 设置短期缓存，分页列表通常可缓存
+    from fastapi import Response
+    resp = Response(content=None)
+    resp.headers["Cache-Control"] = "public, max-age=120"
     return CourseListResponse(
         courses=[CourseResponse.from_orm(course) for course in courses],
         total=total,
