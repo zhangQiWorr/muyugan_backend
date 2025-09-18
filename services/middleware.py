@@ -9,6 +9,10 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import json
+try:
+    import orjson
+except Exception:
+    orjson = None
 
 from services.logger import get_logger, EnhancedLogger
 
@@ -39,7 +43,10 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
                 # 读取请求体
                 body = await request.body()
                 if body:
-                    request_body = json.loads(body.decode())
+                    if orjson:
+                        request_body = orjson.loads(body)
+                    else:
+                        request_body = json.loads(body.decode())
                     # 隐藏敏感信息
                     if isinstance(request_body, dict):
                         sensitive_fields = ["password", "token", "api_key", "secret"]
@@ -55,7 +62,13 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
         )
         
         if request_body:
-            api_logger.debug(f"📋 [REQ-{request_id}] Request body: {json.dumps(request_body, ensure_ascii=False)}")
+            try:
+                serialized = orjson.dumps(request_body).decode() if orjson else json.dumps(request_body, ensure_ascii=False)
+                if len(serialized) > 2000:
+                    serialized = serialized[:2000] + "..."
+                api_logger.debug(f"📋 [REQ-{request_id}] Request body: {serialized}")
+            except Exception:
+                pass
         
         # 处理请求
         try:
@@ -92,7 +105,7 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
                     # 记录错误响应
                     if response_body:
                         try:
-                            error_data = json.loads(response_body.decode())
+                            error_data = orjson.loads(response_body) if orjson else json.loads(response_body.decode())
                             api_logger.error(f"❌ [REQ-{request_id}] Error response: {error_data}")
                         except:
                             api_logger.error(f"❌ [REQ-{request_id}] Error response: {response_body.decode()[:500]}")

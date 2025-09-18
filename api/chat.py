@@ -12,9 +12,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from langgraph.checkpoint.postgres import PostgresSaver
-from langchain_core.messages.ai import  AIMessageChunk
-from langchain_core.messages.tool import ToolMessage
+# 延迟导入重型AI依赖，避免冷启动和非聊天路径的开销
+AIMessageChunk = None
+ToolMessage = None
+
+def _ensure_ai_message_types():
+    global AIMessageChunk, ToolMessage
+    if AIMessageChunk is None or ToolMessage is None:
+        from langchain_core.messages.ai import AIMessageChunk as _AIMessageChunk
+        from langchain_core.messages.tool import ToolMessage as _ToolMessage
+        AIMessageChunk = _AIMessageChunk
+        ToolMessage = _ToolMessage
 
 from models import get_db
 from models.user import User
@@ -551,6 +559,11 @@ async def stream_chat(
                 chat_logger.info(f"📋 构建普通文本消息")
             try:
                 # 发送初始响应
+                # 延迟导入PostgresSaver
+                from langgraph.checkpoint.postgres import PostgresSaver
+                # 确保AI消息类型已加载
+                _ensure_ai_message_types()
+
                 with PostgresSaver.from_conn_string(os.getenv("DATABASE_URL")) as checkpointer:
                     # 获取智能体实例
                     agent_instance = await agent_manager.get_agent_instance(
@@ -702,11 +715,11 @@ async def stream_chat(
 
         return StreamingResponse(
             generate_stream(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream"
+                "X-Accel-Buffering": "no"
             }
         )
             

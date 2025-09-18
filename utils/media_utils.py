@@ -6,9 +6,11 @@ import os
 import tempfile
 from typing import Optional
 from pathlib import Path
-import cv2
 import ffmpeg
-import librosa
+
+# 延迟导入重型依赖，避免无关路径增大启动/内存占用
+cv2 = None
+librosa = None
 
 MOVIEPY_AVAILABLE = False
 VideoFileClip = None
@@ -177,6 +179,14 @@ def get_video_duration_opencv(video_path: str) -> int:
     """使用OpenCV获取视频时长（备用方案）"""
     try:
         logger.info(f"⏱️  使用OpenCV获取视频时长: {video_path}")
+        global cv2
+        if cv2 is None:
+            try:
+                import cv2 as _cv2
+                cv2 = _cv2
+            except Exception as e:
+                logger.error(f"❌ OpenCV 未安装: {str(e)}")
+                return None
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -204,5 +214,14 @@ def get_video_duration_opencv(video_path: str) -> int:
 
 
 def get_audio_duration(file_path: str) -> int:
+    global librosa
+    if librosa is None:
+        try:
+            import librosa as _librosa
+            librosa = _librosa
+        except Exception as e:
+            logger.error(f"❌ librosa 未安装: {str(e)}")
+            return None
+
     audio, sr = librosa.load(file_path)
-    return int(len(audio) / sr ) # 返回时长（秒）
+    return int(len(audio) / sr)

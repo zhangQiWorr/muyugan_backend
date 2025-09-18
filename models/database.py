@@ -10,16 +10,25 @@ import os
 
 # 数据库连接配置
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
+    "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable"
 )
+
+# 连接池配置（与 config.py 对齐，提供环境变量覆盖）
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
 
 # 创建数据库引擎
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    pool_recycle=300,
-    echo=False  # 设置为True可以看到SQL调试信息
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
+    pool_timeout=POOL_TIMEOUT,
+    pool_recycle=POOL_RECYCLE,
+    echo=False
 )
 
 # 创建数据库会话

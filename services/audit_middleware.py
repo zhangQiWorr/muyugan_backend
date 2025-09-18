@@ -1,6 +1,10 @@
 """审计日志中间件"""
 import time
 import json
+try:
+    import orjson
+except Exception:
+    orjson = None
 from typing import Callable, Optional, Dict, Any
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -37,6 +41,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start_time = time.time()
         
+        # 热路径快速跳过：静态、健康、docs
+        path = request.url.path
+        if path.startswith(('/static', '/docs', '/redoc')) or path in {'/openapi.json', '/favicon.ico', '/', '/health'}:
+            return await call_next(request)
+
         # 获取用户信息
         user = await self._get_user_from_request(request)
 
@@ -187,7 +196,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
             # 解析JSON
             try:
-                body_json = json.loads(body_bytes.decode("utf-8"))
+                body_json = orjson.loads(body_bytes) if orjson else json.loads(body_bytes.decode("utf-8"))
             except Exception:
                 body_json = None
 
