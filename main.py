@@ -12,7 +12,9 @@ from contextlib import asynccontextmanager
 # FastAPI 相关导入
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import ORJSONResponse
 
 # 自定义模块导入
 from models import SessionLocal, create_tables
@@ -221,11 +223,23 @@ app = FastAPI(
     title="AI智能聊天 + 知识付费App后端系统",
     description="完整的AI聊天平台和知识付费应用后端，支持智能对话、课程管理、用户管理、订单支付、会员系统等功能",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    default_response_class=ORJSONResponse
 )
 
-# 挂载静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# 挂载静态文件（添加缓存）
+class CachingStaticFiles(StaticFiles):
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        # 维持父类弱验证; 主要通过 Cache-Control 提升缓存
+        return super().is_not_modified(response_headers, request_headers)
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        # 针对静态资源设置较长缓存
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        return response
+
+app.mount("/static", CachingStaticFiles(directory="static"), name="static")
 
 # 中间件配置
 app.add_middleware(
@@ -235,6 +249,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 响应压缩（对大于1KB的响应启用）
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # 添加日志中间件
 app.add_middleware(APILoggingMiddleware)
