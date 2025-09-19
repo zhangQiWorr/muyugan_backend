@@ -227,19 +227,19 @@ app = FastAPI(
     default_response_class=ORJSONResponse
 )
 
-# 挂载静态文件（添加缓存）
-class CachingStaticFiles(StaticFiles):
-    def is_not_modified(self, response_headers, request_headers) -> bool:
-        # 维持父类弱验证; 主要通过 Cache-Control 提升缓存
-        return super().is_not_modified(response_headers, request_headers)
+# # 挂载静态文件（添加缓存）
+# class CachingStaticFiles(StaticFiles):
+#     def is_not_modified(self, response_headers, request_headers) -> bool:
+#         # 维持父类弱验证; 主要通过 Cache-Control 提升缓存
+#         return super().is_not_modified(response_headers, request_headers)
+#
+#     def file_response(self, *args, **kwargs):
+#         response = super().file_response(*args, **kwargs)
+#         # 针对静态资源设置较长缓存
+#         response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+#         return response
 
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        # 针对静态资源设置较长缓存
-        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
-        return response
-
-app.mount("/static", CachingStaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 中间件配置
 app.add_middleware(
@@ -262,16 +262,16 @@ from services.audit_middleware import AuditMiddleware
 app.add_middleware(AuditMiddleware)
 
 # 注册基础路由
-app.include_router(health_router)
-app.include_router(auth_router)
+app.include_router(health_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 app.include_router(images_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 
 # 知识付费相关路由注册
 app.include_router(courses_router, prefix="/api")
-app.include_router(orders_router)
-app.include_router(learning_router)
-app.include_router(membership_router)
+app.include_router(orders_router, prefix="/api")
+app.include_router(learning_router, prefix="/api")
+app.include_router(membership_router, prefix="/api")
 app.include_router(superadmin_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(conversations_router, prefix="/api")

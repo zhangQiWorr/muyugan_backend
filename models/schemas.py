@@ -122,8 +122,6 @@ class StreamChatRequest(BaseModel):
 class CourseLessonBase(BaseSchema):
     title: str = Field(..., max_length=200)
     description: Optional[str] = None
-
-
     content_text: Optional[str] = None
     duration: int = Field(0, ge=0)
     sort_order: int = 0

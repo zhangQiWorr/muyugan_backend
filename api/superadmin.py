@@ -807,6 +807,8 @@ async def batch_create_enrollments(
                         # 如果之前报名过但被禁用了，重新激活
                         existing_enrollment.is_active = True
                         existing_enrollment.enrolled_at = datetime.utcnow()
+                        # 更新课程的报名数量
+                        course.enroll_count = (course.enroll_count or 0) + 1
                         db.commit()
                         db.refresh(existing_enrollment)
                         

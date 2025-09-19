@@ -653,7 +653,7 @@ async def generate_presign_url(
                 raise HTTPException(status_code=400, detail="本地文件路径不存在")
             
             # 构建本地文件服务地址
-            local_url = f"http://10.98.24.251:8000{media.filepath}"
+            local_url = f"http://10.98.24.238:8000{media.filepath}"
             
             logger.info(f"✅ 成功生成本地文件URL: {media.filename}")
             

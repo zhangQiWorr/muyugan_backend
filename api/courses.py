@@ -553,6 +553,9 @@ async def get_courses(
     status: Optional[str] = Query(None),
     featured: Optional[bool] = Query(None, description="是否只获取精选课程"),
     hot: Optional[bool] = Query(None, description="是否只获取热门课程"),
+    difficulty: Optional[str] = Query(None, description="按难度筛选: beginner, intermediate, advanced"),
+    price_min: Optional[float] = Query(None, ge=0, description="最低价格"),
+    price_max: Optional[float] = Query(None, ge=0, description="最高价格"),
     sort_by: str = Query("created_at", description="排序字段: created_at, updated_at, title, price, view_count, is_featured, is_hot"),
     sort_order: str = Query("desc", description="排序方向: asc, desc"),
     current_user: Optional[User] = Depends(get_current_user_optional),
@@ -590,6 +593,17 @@ async def get_courses(
     # 热门课程过滤
     if hot is not None:
         query = query.filter(Course.is_hot == hot)
+    
+    # 难度过滤
+    if difficulty:
+        query = query.filter(Course.difficulty_level == difficulty)
+    
+    # 价格范围过滤
+    if price_min is not None:
+        query = query.filter(Course.price >= price_min)
+    
+    if price_max is not None:
+        query = query.filter(Course.price <= price_max)
     
     # 排序逻辑
     valid_sort_fields = {
