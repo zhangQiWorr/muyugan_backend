@@ -16,7 +16,7 @@ from services.learning_service import LearningService
 from services.logger import get_logger
 
 logger = get_logger("learning_api")
-router = APIRouter(prefix="/api/learning", tags=["学习管理"])
+router = APIRouter(prefix="/learning", tags=["学习管理"])
 
 # 在文件顶部添加常量导入
 from services.learning_service import LESSON_COMPLETION_THRESHOLD
@@ -86,6 +86,33 @@ class CourseLessonsProgressResponse(BaseModel):
     course_progress_percentage: float  # 课程整体进度
     lessons: List[LessonProgressResponse]
 
+class EnrolledCourseResponse(BaseModel):
+    """已报名课程响应"""
+    course_id: str
+    title: str
+    subtitle: Optional[str]
+    description: Optional[str]
+    cover_image: Optional[str]
+    duration: int  # 课程总时长（秒）
+    lesson_count: int  # 课时总数
+    difficulty_level: str
+    is_featured: bool
+    is_hot: bool
+    price: float
+    original_price: Optional[float]
+    enrolled_at: datetime
+    last_watch_at: Optional[datetime]
+    course_progress: dict  # 课程进度信息
+    category: Optional[dict]  # 课程分类信息
+
+class EnrolledCoursesResponse(BaseModel):
+    """已报名课程列表响应"""
+    courses: List[EnrolledCourseResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
 @router.post("/lesson/start")
 async def start_lesson(
     lesson_id: str,
@@ -111,115 +138,6 @@ async def start_lesson(
     except Exception as e:
         logger.error(f"开始学习失败: {str(e)}")
         raise HTTPException(status_code=500, detail="开始学习失败")
-
-@router.post("/media/progress")
-async def update_media_progress(
-    progress_data: MediaProgressRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """更新媒体观看进度
-    
-    记录用户观看媒体文件的进度，并自动更新相关课时的学习进度
-    注意：此接口主要用于内部调用，媒体文件播放事件上报时会自动调用此接口
-    """
-    try:
-        learning_service = LearningService(db)
-        
-        # 记录媒体观看进度
-        play_record = learning_service.record_media_progress(
-            current_user.id,
-            progress_data.media_id,
-            progress_data.watch_duration,
-            progress_data.total_duration
-        )
-        
-        # 获取媒体文件信息，找到关联的课时
-        from models.media import Media
-        media = db.query(Media).filter(Media.id == progress_data.media_id).first()
-        
-        if media and media.lesson_id:
-            # 更新课时学习进度
-            lesson_progress = learning_service.update_lesson_progress(
-                current_user.id,
-                media.lesson_id
-            )
-            
-            # 计算课时进度详情
-            lesson_progress_detail = learning_service.calculate_lesson_progress(
-                current_user.id,
-                media.lesson_id
-            )
-            
-            return {
-                "message": "媒体观看进度更新成功",
-                "media_id": progress_data.media_id,
-                "media_progress": {
-                    "progress_percentage": round(play_record.progress * 100, 1),
-                    "watch_duration": play_record.effective_duration,
-                    "total_duration": progress_data.total_duration,
-                    "is_completed": play_record.completed
-                },
-                "lesson_progress": {
-                    "lesson_id": media.lesson_id,
-                    "progress_percentage": lesson_progress_detail['progress_percentage'],
-                    "completed_media": lesson_progress_detail['completed_media'],
-                    "total_media": lesson_progress_detail['total_media'],
-                    "is_completed": lesson_progress.is_completed
-                }
-            }
-        else:
-            return {
-                "message": "媒体观看进度更新成功",
-                "media_id": progress_data.media_id,
-                "media_progress": {
-                    "progress_percentage": round(play_record.progress * 100, 1),
-                    "watch_duration": play_record.effective_duration,
-                    "total_duration": progress_data.total_duration,
-                    "is_completed": play_record.completed
-                }
-            }
-    except Exception as e:
-        logger.error(f"更新媒体观看进度失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="更新媒体观看进度失败")
-
-@router.post("/lesson/progress", response_model=LessonProgressResponse)
-async def update_lesson_progress(
-    progress_data: LessonProgressRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """更新课时学习进度
-    
-    记录用户的学习进度，包括观看时长等
-    注意：此接口主要用于内部调用，媒体文件播放事件上报时会自动调用此接口
-    """
-    try:
-        learning_service = LearningService(db)
-        
-        # 更新课时进度（基于媒体文件观看进度）
-        progress = learning_service.update_lesson_progress(
-            current_user.id,
-            progress_data.lesson_id
-        )
-        
-        # 计算课时进度详情
-        lesson_progress_detail = learning_service.calculate_lesson_progress(
-            current_user.id,
-            progress_data.lesson_id
-        )
-        
-        return LessonProgressResponse(
-            lesson_id=progress.lesson_id,
-            is_completed=progress.is_completed,
-            watch_duration=progress.watch_duration,
-            total_duration=progress.total_duration,
-            progress_percentage=lesson_progress_detail['progress_percentage'],
-            last_watched_at=progress.last_watched_at
-        )
-    except Exception as e:
-        logger.error(f"更新学习进度失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="更新学习进度失败")
 
 @router.get("/courses/recent", response_model=List[RecentCourseResponse])
 async def get_recent_courses(
@@ -498,7 +416,7 @@ async def get_course_lessons_progress(
         total_duration = sum(lesson.duration for lesson in lessons)
         
         # 计算课程整体进度
-        course_progress_percentage = (total_watch_duration / total_duration) * 100 if total_duration > 0 else 0.0
+        course_progress_percentage = (completed_lessons / len(lessons)) * 100 if len(lessons) > 0 else 0.0
         
         return CourseLessonsProgressResponse(
             course_id=course_id,
@@ -516,3 +434,141 @@ async def get_course_lessons_progress(
     except Exception as e:
         logger.error(f"获取课程课时进度失败: {str(e)}")
         raise HTTPException(status_code=500, detail="获取课程课时进度失败")
+
+@router.get("/courses/enrolled", response_model=EnrolledCoursesResponse)
+async def get_enrolled_courses(
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(10, ge=1, le=50, description="每页数量"),
+    user_id: Optional[str] = Query(None, description="用户ID（管理员可指定其他用户）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取用户已报名的课程列表及其学习进度
+    
+    返回用户已报名的所有课程，包含每个课程的详细信息和学习进度
+    
+    Args:
+        page: 页码，默认为1
+        size: 每页数量，默认为10，最大50
+        user_id: 用户ID，管理员可指定其他用户，普通用户只能查看自己的数据
+        current_user: 当前用户
+    """
+    try:
+        # 确定要查询的用户ID
+        target_user_id = user_id if user_id else current_user.id
+        
+        # 权限检查：如果不是管理员且查询的不是自己的数据，则拒绝访问
+        if target_user_id != current_user.id:
+            from utils.auth_utils import check_admin_permission
+            check_admin_permission(current_user)
+        
+        # 导入必要的模型
+        from models.course import Course, CourseEnrollment, CourseLesson, CourseCategory
+        from sqlalchemy import desc, func as sql_func
+        
+        # 查询用户已报名的课程
+        enrolled_courses_query = db.query(
+            CourseEnrollment,
+            Course,
+            CourseCategory
+        ).join(
+            Course, CourseEnrollment.course_id == Course.id
+        ).outerjoin(
+            CourseCategory, Course.category_id == CourseCategory.id
+        ).filter(
+            CourseEnrollment.user_id == target_user_id,
+            CourseEnrollment.is_active == True,
+            Course.status == "published"  # 只返回已发布的课程
+        ).order_by(desc(CourseEnrollment.enrolled_at))
+        
+        # 获取总数
+        total = enrolled_courses_query.count()
+        
+        # 分页
+        enrolled_courses = enrolled_courses_query.offset((page - 1) * size).limit(size).all()
+        
+        learning_service = LearningService(db)
+        enrolled_courses_list = []
+        
+        for enrollment, course, category in enrolled_courses:
+            # 获取课程课时信息
+            lessons = db.query(CourseLesson).filter(
+                CourseLesson.course_id == course.id,
+                CourseLesson.is_active == True
+            ).order_by(CourseLesson.sort_order.asc()).all()
+            
+            # 计算课程总时长
+            total_duration = sum(lesson.duration for lesson in lessons) if lessons else 0
+            
+            # 计算课程学习进度
+            course_progress = learning_service.calculate_course_progress(target_user_id, course.id)
+            
+            # 获取最后观看时间
+            last_watch_at = None
+            try:
+                from models.course import LearningProgress
+                last_progress = db.query(LearningProgress).filter(
+                    and_(
+                        LearningProgress.user_id == target_user_id,
+                        LearningProgress.course_id == course.id
+                    )
+                ).order_by(desc(LearningProgress.last_watched_at)).first()
+                if last_progress:
+                    last_watch_at = last_progress.last_watched_at
+            except Exception as e:
+                logger.warning(f"获取最后观看时间失败: {e}")
+            
+            # 构建课程分类信息
+            category_info = None
+            if category:
+                category_info = {
+                    "id": category.id,
+                    "name": category.name,
+                    "description": category.description,
+                    "icon": category.icon
+                }
+            
+            # 构建课程进度信息
+            progress_info = {
+                "progress_percentage": course_progress.get('progress_percentage', 0.0),
+                "total_watch_duration": course_progress.get('total_watch_duration', 0),
+                "total_duration": total_duration,
+                "completed_lessons": course_progress.get('completed_lessons', 0),
+                "total_lessons": len(lessons),
+                "is_completed": course_progress.get('progress_percentage', 0.0) >= 100.0
+            }
+            
+            enrolled_course = EnrolledCourseResponse(
+                course_id=course.id,
+                title=course.title,
+                subtitle=course.subtitle,
+                description=course.description,
+                cover_image=course.cover_image,
+                duration=total_duration,
+                lesson_count=len(lessons),
+                difficulty_level=course.difficulty_level,
+                is_featured=course.is_featured,
+                is_hot=course.is_hot,
+                price=course.price,
+                original_price=course.original_price,
+                enrolled_at=enrollment.enrolled_at,
+                last_watch_at=last_watch_at,
+                course_progress=progress_info,
+                category=category_info
+            )
+            
+            enrolled_courses_list.append(enrolled_course)
+        
+        return EnrolledCoursesResponse(
+            courses=enrolled_courses_list,
+            total=total,
+            page=page,
+            size=size,
+            pages=(total + size - 1) // size
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取已报名课程失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取已报名课程失败")

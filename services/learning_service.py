@@ -77,81 +77,6 @@ class LearningService:
             self.db.rollback()
             logger.error(f"记录学习开始失败: {str(e)}")
             raise
-    
-    def record_media_progress(self, user_id: str, media_id: str, 
-                            watch_duration: int, total_duration: int) -> MediaPlayRecord:
-        """
-        记录用户观看媒体文件的进度
-        
-        Args:
-            user_id: 用户ID
-            media_id: 媒体文件ID
-            watch_duration: 已观看时长（秒）
-            total_duration: 总时长（秒）
-            
-        Returns:
-            MediaPlayRecord: 媒体播放记录
-        """
-        try:
-            # 获取媒体文件信息
-            media = self.db.query(Media).filter(Media.id == media_id).first()
-            if not media:
-                raise ValueError(f"媒体文件不存在: {media_id}")
-            
-            # 获取或创建媒体播放记录
-            play_record = self.db.query(MediaPlayRecord).filter(
-                and_(
-                    MediaPlayRecord.user_id == user_id,
-                    MediaPlayRecord.media_id == media_id
-                )
-            ).first()
-            
-            if not play_record:
-                # 创建新的播放记录
-                play_record = MediaPlayRecord(
-                    user_id=user_id,
-                    media_id=media_id,
-                    current_time=watch_duration,
-                    max_played_time=watch_duration,
-                    total_duration=total_duration,
-                    effective_duration=watch_duration,
-                    total_play_time=watch_duration,
-                    is_playing=True,
-                    play_count=1,
-                    first_played_at=datetime.now(),
-                    last_played_at=datetime.now()
-                )
-                self.db.add(play_record)
-            else:
-                # 更新播放记录
-                play_record.current_time = watch_duration
-                if watch_duration > play_record.max_played_time:
-                    play_record.max_played_time = watch_duration
-                
-                # 更新有效观看时长
-                if watch_duration > play_record.current_time:
-                    play_record.update_effective_duration(watch_duration, play_record.current_time)
-                
-                play_record.total_play_time += watch_duration - play_record.current_time
-                play_record.last_played_at = datetime.now()
-            
-            # 计算播放进度
-            if total_duration > 0:
-                play_record.progress = min(watch_duration / total_duration, 1.0)
-            
-            # 判断是否完成观看（观看进度达到指定阈值）
-            if play_record.progress >= 0.9:  # 注意：这里的0.9是媒体播放记录的完成阈值，与课程学习的阈值不同
-                play_record.completed = True
-                play_record.completed_at = datetime.now()
-                logger.info(f"用户 {user_id} 完成观看媒体 {media_id}")
-            
-            self.db.commit()
-            return play_record
-            
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"记录媒体观看进度失败: {str(e)}")
-            raise
 
     def calculate_lesson_progress(self, user_id: str, lesson_id: str) -> Dict[str, Any]:
         """
@@ -204,6 +129,8 @@ class LearningService:
                 # 累加媒体总时长
                 if media.duration:
                     total_duration += media.duration
+
+            total_watch_duration = min(total_watch_duration, total_duration)
             
             # 计算进度百分比
             progress_percentage = 0.0
@@ -434,6 +361,19 @@ class LearningService:
         except Exception as e:
             logger.error(f"获取用户学习统计失败: {str(e)}")
             raise
+    
+    def calculate_course_progress(self, user_id: str, course_id: str) -> Dict[str, Any]:
+        """
+        计算课程学习进度（公共方法）
+        
+        Args:
+            user_id: 用户ID
+            course_id: 课程ID
+            
+        Returns:
+            Dict: 课程进度信息
+        """
+        return self._calculate_course_progress(user_id, course_id)
     
     def _calculate_course_progress(self, user_id: str, course_id: str) -> Dict[str, Any]:
         """

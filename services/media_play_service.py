@@ -145,7 +145,7 @@ class MediaPlayService:
                 # 如果没有previous_time，尝试从最近的事件中获取
                 last_event = self.db.query(MediaPlayEvent).filter(
                     MediaPlayEvent.record_id == getattr(play_record, 'id'),
-                    MediaPlayEvent.event_type.in_([EventType.PLAY, EventType.HEARTBEAT])
+                    MediaPlayEvent.event_type.in_([EventType.PLAY, EventType.HEARTBEAT, EventType.SEEK])
                 ).order_by(MediaPlayEvent.timestamp.desc()).first()
                 
                 if last_event and last_event.current_time is not None:

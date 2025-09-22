@@ -73,7 +73,28 @@ ROLE_PERMISSIONS: Dict[str, Set[Permissions]] = {
         Permissions.VIEW_ORDERS,
         Permissions.VIEW_LEARNING_PROGRESS,
     },
+    "user": {  # 添加user角色映射，与"普通用户（家长）"权限相同
+        Permissions.VIEW_COURSES,
+        Permissions.CREATE_ORDER,
+        Permissions.VIEW_ORDERS,
+        Permissions.VIEW_LEARNING_PROGRESS,
+    },
     "班主任（教师）": {
+        # 继承普通用户权限
+        Permissions.VIEW_COURSES,
+        Permissions.CREATE_ORDER,
+        Permissions.VIEW_ORDERS,
+        Permissions.VIEW_LEARNING_PROGRESS,
+        # 教师特有权限
+        Permissions.CREATE_COURSE,
+        Permissions.UPDATE_COURSE,
+        Permissions.VIEW_USERS,
+        Permissions.MANAGE_REVIEWS,
+        Permissions.MANAGE_COMMENTS,
+        Permissions.TRACK_USER_ACTIVITY,
+        Permissions.MANAGE_LEARNING_PATHS,
+    },
+    "teacher": {  # 添加teacher角色映射，与"班主任（教师）"权限相同
         # 继承普通用户权限
         Permissions.VIEW_COURSES,
         Permissions.CREATE_ORDER,

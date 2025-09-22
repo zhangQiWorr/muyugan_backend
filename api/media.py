@@ -244,6 +244,9 @@ async def get_media_list(
         course_id: 课程ID过滤
         lesson_id: 课时ID过滤
         exclude_associated: 是否排除已关联的媒体文件 (true/false)
+    
+    Note:
+        结果默认按照文件名进行升序排序
     """
     # 使用joinedload预加载关联的课时和课程信息
     query = db.query(Media).options(
@@ -293,7 +296,7 @@ async def get_media_list(
     
     total = query.count()
     
-    media_list = query.order_by(desc(Media.upload_time)).offset((page - 1) * size).limit(size).all()
+    media_list = query.order_by(Media.filename).offset((page - 1) * size).limit(size).all()
     
     # 构建包含课时和课程信息的响应数据
     items = []
@@ -816,7 +819,7 @@ async def report_play_event(
                     learning_service = LearningService(db)
                     
                     # 更新课时学习进度（内部会自动更新媒体观看进度）
-                    lesson_progress = learning_service.update_lesson_progress(
+                    learning_service.update_lesson_progress(
                         current_user.id,
                         media.lesson_id
                     )
