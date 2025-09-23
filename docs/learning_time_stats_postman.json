@@ -1,0 +1,236 @@
+{
+  "info": {
+    "name": "学习时间统计API",
+    "description": "用户学习时间统计接口集合，支持按周、月、年统计学习时间",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "获取周学习时间统计",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=week",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "week",
+              "description": "统计周期：week(周)"
+            }
+          ]
+        },
+        "description": "获取当前周每日学习时间统计"
+      },
+      "response": [
+        {
+          "name": "成功响应",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/learning/time-statistics?period=week",
+              "host": ["{{base_url}}"],
+              "path": ["learning", "time-statistics"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "week"
+                }
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"period\": \"week\",\n  \"period_name\": \"2024-01-15 至 2024-01-21\",\n  \"total_duration\": 7200,\n  \"formatted_total_duration\": \"2小时\",\n  \"start_date\": \"2024-01-15\",\n  \"end_date\": \"2024-01-21\",\n  \"daily_data\": [\n    {\n      \"date\": \"2024-01-15\",\n      \"duration\": 1200,\n      \"formatted_duration\": \"20分钟\",\n      \"day_of_week\": \"Monday\"\n    },\n    {\n      \"date\": \"2024-01-16\",\n      \"duration\": 1800,\n      \"formatted_duration\": \"30分钟\",\n      \"day_of_week\": \"Tuesday\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "获取月学习时间统计",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=month",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "month",
+              "description": "统计周期：month(月)"
+            }
+          ]
+        },
+        "description": "获取当前月份每天学习时间统计"
+      }
+    },
+    {
+      "name": "获取年学习时间统计",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=year",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "year",
+              "description": "统计周期：year(年)"
+            }
+          ]
+        },
+        "description": "获取当前年每月学习时间统计"
+      }
+    },
+    {
+      "name": "管理员查看其他用户统计",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=week&user_id=user_123",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "week",
+              "description": "统计周期：week(周)"
+            },
+            {
+              "key": "user_id",
+              "value": "user_123",
+              "description": "用户ID（管理员可指定其他用户）"
+            }
+          ]
+        },
+        "description": "管理员查看指定用户的学习时间统计"
+      }
+    },
+    {
+      "name": "错误测试 - 无效统计周期",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=invalid",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "invalid",
+              "description": "无效的统计周期"
+            }
+          ]
+        },
+        "description": "测试无效统计周期参数的错误响应"
+      }
+    },
+    {
+      "name": "错误测试 - 未授权访问",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics?period=week",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"],
+          "query": [
+            {
+              "key": "period",
+              "value": "week"
+            }
+          ]
+        },
+        "description": "测试未授权访问的错误响应"
+      }
+    },
+    {
+      "name": "错误测试 - 缺少必需参数",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/learning/time-statistics",
+          "host": ["{{base_url}}"],
+          "path": ["learning", "time-statistics"]
+        },
+        "description": "测试缺少必需参数period的错误响应"
+      }
+    }
+  ]
+}

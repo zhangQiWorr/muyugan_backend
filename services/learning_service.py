@@ -514,3 +514,265 @@ class LearningService:
         except Exception as e:
             logger.error(f"计算学习连续天数失败: {str(e)}")
             return 0
+
+    def get_learning_time_statistics(self, user_id: str, period: str) -> Dict[str, Any]:
+        """
+        获取用户学习时间统计（按周、月、年）
+        
+        Args:
+            user_id: 用户ID
+            period: 统计周期 ('week', 'month', 'year')
+            
+        Returns:
+            Dict: 学习时间统计数据
+        """
+        try:
+            now = datetime.now()
+            
+            if period == 'week':
+                return self._get_weekly_learning_stats(user_id, now)
+            elif period == 'month':
+                return self._get_monthly_learning_stats(user_id, now)
+            elif period == 'year':
+                return self._get_yearly_learning_stats(user_id, now)
+            else:
+                raise ValueError(f"不支持的统计周期: {period}")
+                
+        except Exception as e:
+            logger.error(f"获取学习时间统计失败: {str(e)}")
+            raise
+
+    def _get_weekly_learning_stats(self, user_id: str, now: datetime) -> Dict[str, Any]:
+        """
+        获取周学习时间统计（当前周每日学习时间）
+        
+        Args:
+            user_id: 用户ID
+            now: 当前时间
+            
+        Returns:
+            Dict: 周学习时间统计
+        """
+        try:
+            # 计算当前周的开始和结束时间
+            # 获取当前是周几（0=周一，6=周日）
+            weekday = now.weekday()
+            week_start = now.date() - timedelta(days=weekday)
+            week_end = week_start + timedelta(days=6)
+            
+            # 查询当前周的学习记录，按日期分组统计
+            daily_stats = self.db.query(
+                func.date(LearningProgress.last_watched_at).label('learn_date'),
+                func.sum(LearningProgress.watch_duration).label('total_duration')
+            ).filter(
+                and_(
+                    LearningProgress.user_id == user_id,
+                    func.date(LearningProgress.last_watched_at) >= week_start,
+                    func.date(LearningProgress.last_watched_at) <= week_end
+                )
+            ).group_by(
+                func.date(LearningProgress.last_watched_at)
+            ).all()
+            
+            # 构建每日数据字典
+            daily_data = {}
+            for record in daily_stats:
+                daily_data[record.learn_date.isoformat()] = int(record.total_duration or 0)
+            
+            # 生成完整的周数据（包含没有学习记录的日期）
+            week_data = []
+            for i in range(7):
+                current_date = week_start + timedelta(days=i)
+                date_str = current_date.isoformat()
+                duration = daily_data.get(date_str, 0)
+                
+                week_data.append({
+                    'date': date_str,
+                    'day_of_week': current_date.strftime('%A'),
+                    'duration': duration,
+                    'formatted_duration': self._format_duration(duration)
+                })
+            
+            # 计算周总时长
+            total_duration = sum(day['duration'] for day in week_data)
+            
+            return {
+                'period': 'week',
+                'period_name': f"{week_start.strftime('%Y-%m-%d')} 至 {week_end.strftime('%Y-%m-%d')}",
+                'total_duration': total_duration,
+                'formatted_total_duration': self._format_duration(total_duration),
+                'daily_data': week_data,
+                'start_date': week_start.isoformat(),
+                'end_date': week_end.isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"获取周学习时间统计失败: {str(e)}")
+            raise
+
+    def _get_monthly_learning_stats(self, user_id: str, now: datetime) -> Dict[str, Any]:
+        """
+        获取月学习时间统计（当前月份每天学习时间）
+        
+        Args:
+            user_id: 用户ID
+            now: 当前时间
+            
+        Returns:
+            Dict: 月学习时间统计
+        """
+        try:
+            # 计算当前月份的开始和结束时间
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if now.month == 12:
+                month_end = now.replace(year=now.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                month_end = now.replace(month=now.month + 1, day=1) - timedelta(days=1)
+            
+            # 查询当前月的学习记录，按日期分组统计
+            daily_stats = self.db.query(
+                func.date(LearningProgress.last_watched_at).label('learn_date'),
+                func.sum(LearningProgress.watch_duration).label('total_duration')
+            ).filter(
+                and_(
+                    LearningProgress.user_id == user_id,
+                    func.date(LearningProgress.last_watched_at) >= month_start.date(),
+                    func.date(LearningProgress.last_watched_at) <= month_end.date()
+                )
+            ).group_by(
+                func.date(LearningProgress.last_watched_at)
+            ).all()
+            
+            # 构建每日数据字典
+            daily_data = {}
+            for record in daily_stats:
+                daily_data[record.learn_date.isoformat()] = int(record.total_duration or 0)
+            
+            # 生成完整的月数据（包含没有学习记录的日期）
+            month_data = []
+            current_date = month_start.date()
+            while current_date <= month_end.date():
+                date_str = current_date.isoformat()
+                duration = daily_data.get(date_str, 0)
+                
+                month_data.append({
+                    'date': date_str,
+                    'day_of_month': current_date.day,
+                    'duration': duration,
+                    'formatted_duration': self._format_duration(duration)
+                })
+                
+                current_date += timedelta(days=1)
+            
+            # 计算月总时长
+            total_duration = sum(day['duration'] for day in month_data)
+            
+            return {
+                'period': 'month',
+                'period_name': f"{month_start.strftime('%Y年%m月')}",
+                'total_duration': total_duration,
+                'formatted_total_duration': self._format_duration(total_duration),
+                'daily_data': month_data,
+                'start_date': month_start.date().isoformat(),
+                'end_date': month_end.date().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"获取月学习时间统计失败: {str(e)}")
+            raise
+
+    def _get_yearly_learning_stats(self, user_id: str, now: datetime) -> Dict[str, Any]:
+        """
+        获取年学习时间统计（当前年每月学习时间）
+        
+        Args:
+            user_id: 用户ID
+            now: 当前时间
+            
+        Returns:
+            Dict: 年学习时间统计
+        """
+        try:
+            # 计算当前年份的开始和结束时间
+            year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            year_end = now.replace(month=12, day=31, hour=23, minute=59, second=59, microsecond=999999)
+            
+            # 查询当前年的学习记录，按月份分组统计
+            monthly_stats = self.db.query(
+                func.extract('year', LearningProgress.last_watched_at).label('year'),
+                func.extract('month', LearningProgress.last_watched_at).label('month'),
+                func.sum(LearningProgress.watch_duration).label('total_duration')
+            ).filter(
+                and_(
+                    LearningProgress.user_id == user_id,
+                    LearningProgress.last_watched_at >= year_start,
+                    LearningProgress.last_watched_at <= year_end
+                )
+            ).group_by(
+                func.extract('year', LearningProgress.last_watched_at),
+                func.extract('month', LearningProgress.last_watched_at)
+            ).all()
+            
+            # 构建每月数据字典
+            monthly_data = {}
+            for record in monthly_stats:
+                month_key = int(record.month)
+                monthly_data[month_key] = int(record.total_duration or 0)
+            
+            # 生成完整的年数据（包含没有学习记录的月份）
+            year_data = []
+            month_names = ['', '一月', '二月', '三月', '四月', '五月', '六月',
+                          '七月', '八月', '九月', '十月', '十一月', '十二月']
+            
+            for month in range(1, 13):
+                duration = monthly_data.get(month, 0)
+                
+                year_data.append({
+                    'month': month,
+                    'month_name': month_names[month],
+                    'duration': duration,
+                    'formatted_duration': self._format_duration(duration)
+                })
+            
+            # 计算年总时长
+            total_duration = sum(month['duration'] for month in year_data)
+            
+            return {
+                'period': 'year',
+                'period_name': f"{now.year}年",
+                'total_duration': total_duration,
+                'formatted_total_duration': self._format_duration(total_duration),
+                'monthly_data': year_data,
+                'year': now.year
+            }
+            
+        except Exception as e:
+            logger.error(f"获取年学习时间统计失败: {str(e)}")
+            raise
+
+    def _format_duration(self, duration_seconds: int) -> str:
+        """
+        格式化时长显示
+        
+        Args:
+            duration_seconds: 时长（秒）
+            
+        Returns:
+            str: 格式化后的时长字符串
+        """
+        if duration_seconds < 60:
+            return f"{duration_seconds}秒"
+        elif duration_seconds < 3600:
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            return f"{minutes}分{seconds}秒"
+        else:
+            hours = duration_seconds // 3600
+            minutes = (duration_seconds % 3600) // 60
+            seconds = duration_seconds % 60
+            if minutes == 0 and seconds == 0:
+                return f"{hours}小时"
+            elif seconds == 0:
+                return f"{hours}小时{minutes}分钟"
+            else:
+                return f"{hours}小时{minutes}分钟{seconds}秒"

@@ -409,10 +409,130 @@ Authorization: Bearer <token>
 ### 5.7 获取已完成课程
 **GET** `/api/learning/courses/completed`
 
-### 5.8 获取课程课时进度
+**查询参数:**
+- `page`: int (页码，默认1)
+- `size`: int (每页数量，默认10，最大50)
+- `user_id`: string (用户ID，管理员可指定)
+
+### 5.8 获取学习时间统计
+**GET** `/api/learning/time-statistics`
+
+**功能说明:**
+根据指定周期返回用户的学习时间统计信息，支持按周、月、年统计。
+
+**查询参数:**
+- `period`: string (必填) - 统计周期，支持: `week`(周)、`month`(月)、`year`(年)
+- `user_id`: string (可选) - 用户ID，管理员可指定其他用户
+
+**权限要求:**
+- 普通用户只能查看自己的学习时间统计
+- 管理员可以查看任意用户的统计
+
+**响应示例:**
+
+**周统计响应:**
+```json
+{
+  "period": "week",
+  "period_name": "2024-01-15 至 2024-01-21",
+  "total_duration": 7200,
+  "formatted_total_duration": "2小时",
+  "start_date": "2024-01-15",
+  "end_date": "2024-01-21",
+  "daily_data": [
+    {
+      "date": "2024-01-15",
+      "duration": 1200,
+      "formatted_duration": "20分钟",
+      "day_of_week": "Monday"
+    },
+    {
+      "date": "2024-01-16",
+      "duration": 1800,
+      "formatted_duration": "30分钟",
+      "day_of_week": "Tuesday"
+    }
+    // ... 其他5天的数据
+  ]
+}
+```
+
+**月统计响应:**
+```json
+{
+  "period": "month",
+  "period_name": "2024年01月",
+  "total_duration": 36000,
+  "formatted_total_duration": "10小时",
+  "start_date": "2024-01-01",
+  "end_date": "2024-01-31",
+  "daily_data": [
+    {
+      "date": "2024-01-01",
+      "duration": 1800,
+      "formatted_duration": "30分钟",
+      "day_of_month": 1
+    }
+    // ... 其他30天的数据
+  ]
+}
+```
+
+**年统计响应:**
+```json
+{
+  "period": "year",
+  "period_name": "2024年",
+  "total_duration": 432000,
+  "formatted_total_duration": "120小时",
+  "year": 2024,
+  "monthly_data": [
+    {
+      "month": 1,
+      "month_name": "一月",
+      "duration": 36000,
+      "formatted_duration": "10小时"
+    },
+    {
+      "month": 2,
+      "month_name": "二月",
+      "duration": 28800,
+      "formatted_duration": "8小时"
+    }
+    // ... 其他10个月的数据
+  ]
+}
+```
+
+**错误响应:**
+- `400 Bad Request`: 统计周期参数错误
+- `401 Unauthorized`: 未授权访问
+- `403 Forbidden`: 权限不足
+- `422 Unprocessable Entity`: 缺少必需参数
+
+**使用示例:**
+```bash
+# 获取当前周学习时间统计
+curl -X GET "http://localhost:8000/api/learning/time-statistics?period=week" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# 获取当前月学习时间统计
+curl -X GET "http://localhost:8000/api/learning/time-statistics?period=month" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# 获取当前年学习时间统计
+curl -X GET "http://localhost:8000/api/learning/time-statistics?period=year" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### 5.9 获取课程课时进度
 **GET** `/api/learning/courses/{course_id}/lessons/statistics`
 
-### 5.9 获取已报名课程列表
+**查询参数:**
+- `course_id`: string (课程ID)
+- `user_id`: string (用户ID，管理员可指定)
+
+### 5.10 获取已报名课程列表
 **GET** `/api/learning/courses/enrolled`
 
 **查询参数:**

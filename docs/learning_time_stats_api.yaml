@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: 学习时间统计API
+  description: 用户学习时间统计接口，支持按周、月、年统计学习时间
+  version: 1.0.0
+  contact:
+    name: 木鱼干后端团队
+    email: support@muyugan.com
+
+servers:
+  - url: http://localhost:8000
+    description: 开发环境
+  - url: https://api.muyugan.com
+    description: 生产环境
+
+paths:
+  /learning/time-statistics:
+    get:
+      summary: 获取学习时间统计
+      description: |
+        根据指定周期返回用户的学习时间统计信息：
+        - week: 返回当前周每日学习时间
+        - month: 返回当前月份每天学习时间  
+        - year: 返回当前年每月学习时间
+      tags:
+        - 学习管理
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: period
+          in: query
+          required: true
+          description: 统计周期
+          schema:
+            type: string
+            enum: [week, month, year]
+            example: week
+        - name: user_id
+          in: query
+          required: false
+          description: 用户ID（管理员可指定其他用户）
+          schema:
+            type: string
+            example: "user_123"
+      responses:
+        '200':
+          description: 成功获取学习时间统计
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WeeklyStatsResponse'
+                  - $ref: '#/components/schemas/MonthlyStatsResponse'
+                  - $ref: '#/components/schemas/YearlyStatsResponse'
+              examples:
+                weekly:
+                  summary: 周统计示例
+                  value:
+                    period: "week"
+                    period_name: "2024-01-15 至 2024-01-21"
+                    total_duration: 7200
+                    formatted_total_duration: "2小时"
+                    start_date: "2024-01-15"
+                    end_date: "2024-01-21"
+                    daily_data:
+                      - date: "2024-01-15"
+                        duration: 1200
+                        formatted_duration: "20分钟"
+                        day_of_week: "Monday"
+                      - date: "2024-01-16"
+                        duration: 1800
+                        formatted_duration: "30分钟"
+                        day_of_week: "Tuesday"
+                monthly:
+                  summary: 月统计示例
+                  value:
+                    period: "month"
+                    period_name: "2024年01月"
+                    total_duration: 36000
+                    formatted_total_duration: "10小时"
+                    start_date: "2024-01-01"
+                    end_date: "2024-01-31"
+                    daily_data:
+                      - date: "2024-01-01"
+                        duration: 1800
+                        formatted_duration: "30分钟"
+                        day_of_month: 1
+                yearly:
+                  summary: 年统计示例
+                  value:
+                    period: "year"
+                    period_name: "2024年"
+                    total_duration: 432000
+                    formatted_total_duration: "120小时"
+                    year: 2024
+                    monthly_data:
+                      - month: 1
+                        month_name: "一月"
+                        duration: 36000
+                        formatted_duration: "10小时"
+                      - month: 2
+                        month_name: "二月"
+                        duration: 28800
+                        formatted_duration: "8小时"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "统计周期参数错误，支持: week, month, year"
+        '401':
+          description: 未授权访问
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "Not authenticated"
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "权限不足"
+        '422':
+          description: 参数验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+              example:
+                detail:
+                  - loc: ["query", "period"]
+                    msg: "field required"
+                    type: "value_error.missing"
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "获取学习时间统计失败"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT认证令牌
+
+  schemas:
+    DailyLearningData:
+      type: object
+      description: 每日学习数据
+      required:
+        - date
+        - duration
+        - formatted_duration
+      properties:
+        date:
+          type: string
+          format: date
+          description: 日期 (YYYY-MM-DD)
+          example: "2024-01-15"
+        duration:
+          type: integer
+          description: 学习时长（秒）
+          example: 1200
+        formatted_duration:
+          type: string
+          description: 格式化后的时长
+          example: "20分钟"
+        day_of_week:
+          type: string
+          description: 星期几（周统计用）
+          example: "Monday"
+        day_of_month:
+          type: integer
+          description: 月中的第几天（月统计用）
+          example: 15
+
+    MonthlyLearningData:
+      type: object
+      description: 每月学习数据
+      required:
+        - month
+        - month_name
+        - duration
+        - formatted_duration
+      properties:
+        month:
+          type: integer
+          minimum: 1
+          maximum: 12
+          description: 月份 (1-12)
+          example: 1
+        month_name:
+          type: string
+          description: 月份名称
+          example: "一月"
+        duration:
+          type: integer
+          description: 学习时长（秒）
+          example: 36000
+        formatted_duration:
+          type: string
+          description: 格式化后的时长
+          example: "10小时"
+
+    WeeklyStatsResponse:
+      type: object
+      description: 周学习时间统计响应
+      required:
+        - period
+        - period_name
+        - total_duration
+        - formatted_total_duration
+        - daily_data
+      properties:
+        period:
+          type: string
+          enum: [week]
+          description: 统计周期
+          example: "week"
+        period_name:
+          type: string
+          description: 周期名称
+          example: "2024-01-15 至 2024-01-21"
+        total_duration:
+          type: integer
+          description: 总学习时长（秒）
+          example: 7200
+        formatted_total_duration:
+          type: string
+          description: 格式化后的总时长
+          example: "2小时"
+        start_date:
+          type: string
+          format: date
+          description: 开始日期
+          example: "2024-01-15"
+        end_date:
+          type: string
+          format: date
+          description: 结束日期
+          example: "2024-01-21"
+        daily_data:
+          type: array
+          description: 每日数据
+          items:
+            $ref: '#/components/schemas/DailyLearningData'
+
+    MonthlyStatsResponse:
+      type: object
+      description: 月学习时间统计响应
+      required:
+        - period
+        - period_name
+        - total_duration
+        - formatted_total_duration
+        - daily_data
+      properties:
+        period:
+          type: string
+          enum: [month]
+          description: 统计周期
+          example: "month"
+        period_name:
+          type: string
+          description: 周期名称
+          example: "2024年01月"
+        total_duration:
+          type: integer
+          description: 总学习时长（秒）
+          example: 36000
+        formatted_total_duration:
+          type: string
+          description: 格式化后的总时长
+          example: "10小时"
+        start_date:
+          type: string
+          format: date
+          description: 开始日期
+          example: "2024-01-01"
+        end_date:
+          type: string
+          format: date
+          description: 结束日期
+          example: "2024-01-31"
+        daily_data:
+          type: array
+          description: 每日数据
+          items:
+            $ref: '#/components/schemas/DailyLearningData'
+
+    YearlyStatsResponse:
+      type: object
+      description: 年学习时间统计响应
+      required:
+        - period
+        - period_name
+        - total_duration
+        - formatted_total_duration
+        - monthly_data
+      properties:
+        period:
+          type: string
+          enum: [year]
+          description: 统计周期
+          example: "year"
+        period_name:
+          type: string
+          description: 周期名称
+          example: "2024年"
+        total_duration:
+          type: integer
+          description: 总学习时长（秒）
+          example: 432000
+        formatted_total_duration:
+          type: string
+          description: 格式化后的总时长
+          example: "120小时"
+        year:
+          type: integer
+          description: 年份
+          example: 2024
+        monthly_data:
+          type: array
+          description: 每月数据
+          items:
+            $ref: '#/components/schemas/MonthlyLearningData'
+
+    ErrorResponse:
+      type: object
+      description: 错误响应
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: 错误信息
+          example: "统计周期参数错误，支持: week, month, year"
+
+    ValidationErrorResponse:
+      type: object
+      description: 参数验证错误响应
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          description: 验证错误详情
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+                description: 错误位置
+                example: ["query", "period"]
+              msg:
+                type: string
+                description: 错误消息
+                example: "field required"
+              type:
+                type: string
+                description: 错误类型
+                example: "value_error.missing"

@@ -113,6 +113,33 @@ class EnrolledCoursesResponse(BaseModel):
     size: int
     pages: int
 
+class DailyLearningData(BaseModel):
+    """每日学习数据"""
+    date: str  # 日期 (YYYY-MM-DD)
+    duration: int  # 学习时长（秒）
+    formatted_duration: str  # 格式化后的时长
+    day_of_week: Optional[str] = None  # 星期几（周统计用）
+    day_of_month: Optional[int] = None  # 月中的第几天（月统计用）
+
+class MonthlyLearningData(BaseModel):
+    """每月学习数据"""
+    month: int  # 月份 (1-12)
+    month_name: str  # 月份名称
+    duration: int  # 学习时长（秒）
+    formatted_duration: str  # 格式化后的时长
+
+class LearningTimeStatsResponse(BaseModel):
+    """学习时间统计响应"""
+    period: str  # 统计周期 ('week', 'month', 'year')
+    period_name: str  # 周期名称
+    total_duration: int  # 总学习时长（秒）
+    formatted_total_duration: str  # 格式化后的总时长
+    start_date: Optional[str] = None  # 开始日期
+    end_date: Optional[str] = None  # 结束日期
+    year: Optional[int] = None  # 年份（年统计用）
+    daily_data: Optional[List[DailyLearningData]] = None  # 每日数据（周、月统计用）
+    monthly_data: Optional[List[MonthlyLearningData]] = None  # 每月数据（年统计用）
+
 @router.post("/lesson/start")
 async def start_lesson(
     lesson_id: str,
@@ -572,3 +599,104 @@ async def get_enrolled_courses(
     except Exception as e:
         logger.error(f"获取已报名课程失败: {str(e)}")
         raise HTTPException(status_code=500, detail="获取已报名课程失败")
+
+@router.get("/time-statistics", response_model=LearningTimeStatsResponse)
+async def get_learning_time_statistics(
+    period: str = Query(..., description="统计周期：week(周)、month(月)、year(年)"),
+    user_id: Optional[str] = Query(None, description="用户ID（管理员可指定其他用户）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取用户学习时间统计
+    
+    根据指定周期返回用户的学习时间统计信息：
+    - week: 返回当前周每日学习时间
+    - month: 返回当前月份每天学习时间  
+    - year: 返回当前年每月学习时间
+    
+    Args:
+        period: 统计周期，支持 'week'、'month'、'year'
+        user_id: 用户ID，管理员可指定其他用户，普通用户只能查看自己的数据
+        current_user: 当前用户
+    """
+    try:
+        # 验证统计周期参数
+        if period not in ['week', 'month', 'year']:
+            raise HTTPException(status_code=400, detail="统计周期参数错误，支持: week, month, year")
+        
+        # 确定要查询的用户ID
+        target_user_id = user_id if user_id else current_user.id
+        
+        # 权限检查：如果不是管理员且查询的不是自己的数据，则拒绝访问
+        if target_user_id != current_user.id:
+            from utils.auth_utils import check_admin_permission
+            check_admin_permission(current_user)
+        
+        learning_service = LearningService(db)
+        stats = learning_service.get_learning_time_statistics(target_user_id, period)
+        
+        # 根据统计周期构建响应数据
+        if period == 'week':
+            daily_data = [
+                DailyLearningData(
+                    date=day['date'],
+                    duration=day['duration'],
+                    formatted_duration=day['formatted_duration'],
+                    day_of_week=day['day_of_week']
+                ) for day in stats['daily_data']
+            ]
+            
+            return LearningTimeStatsResponse(
+                period=stats['period'],
+                period_name=stats['period_name'],
+                total_duration=stats['total_duration'],
+                formatted_total_duration=stats['formatted_total_duration'],
+                start_date=stats['start_date'],
+                end_date=stats['end_date'],
+                daily_data=daily_data
+            )
+            
+        elif period == 'month':
+            daily_data = [
+                DailyLearningData(
+                    date=day['date'],
+                    duration=day['duration'],
+                    formatted_duration=day['formatted_duration'],
+                    day_of_month=day['day_of_month']
+                ) for day in stats['daily_data']
+            ]
+            
+            return LearningTimeStatsResponse(
+                period=stats['period'],
+                period_name=stats['period_name'],
+                total_duration=stats['total_duration'],
+                formatted_total_duration=stats['formatted_total_duration'],
+                start_date=stats['start_date'],
+                end_date=stats['end_date'],
+                daily_data=daily_data
+            )
+            
+        elif period == 'year':
+            monthly_data = [
+                MonthlyLearningData(
+                    month=month['month'],
+                    month_name=month['month_name'],
+                    duration=month['duration'],
+                    formatted_duration=month['formatted_duration']
+                ) for month in stats['monthly_data']
+            ]
+            
+            return LearningTimeStatsResponse(
+                period=stats['period'],
+                period_name=stats['period_name'],
+                total_duration=stats['total_duration'],
+                formatted_total_duration=stats['formatted_total_duration'],
+                year=stats['year'],
+                monthly_data=monthly_data
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取学习时间统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取学习时间统计失败")
